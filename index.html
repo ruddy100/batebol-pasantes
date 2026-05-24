@@ -1662,12 +1662,15 @@ const db = {
   users: async () => {
     const c = cacheGet('users', 5000); if (c) return c;
     const user = getCurrentUser();
-    let query = sb.from('users').select('*').order('nombre');
-    // Gestor solo ve los usuarios que él creó (más los gestores para no quedar solo)
+    let query;
     if (user?.rol === 'gestor') {
+      // Gestor ve: cuentas que él creó + otros gestores
+      // Si creado_por es null (cuentas antiguas sin dueño), las ve el gestor que corresponda por ID
       query = sb.from('users').select('*')
-        .or(`creado_por.eq.${user.id},rol.eq.gestor`)
+        .or(`creado_por.eq.${user.id},rol.eq.gestor,creado_por.is.null`)
         .order('nombre');
+    } else {
+      query = sb.from('users').select('*').order('nombre');
     }
     const { data } = await query;
     cacheSet('users', data || []);
@@ -2631,19 +2634,13 @@ function showApp() {
 
 function changeTab(tab) {
   currentTab = tab;
-  // Refrescar datos desde Supabase al navegar (invalida caché)
-  cacheClear('users', 'att', 'act', 'inf', 'pm', 'bon', 'fer');
-  db.users().then(() => {
-    db.attendance().then(() => {
-      db.activities().then(() => {
-        db.informes().then(() => {
-          db.permisos().then(() => {
-            db.bonos().then(() => renderApp());
-          });
-        });
-      });
-    });
-  });
+  renderApp();
+  // Refrescar datos en background sin bloquear la UI
+  cacheClearAll();
+  Promise.all([
+    db.users(), db.attendance(), db.activities(),
+    db.informes(), db.permisos(), db.bonos(),
+  ]).then(() => renderApp()).catch(() => {});
 }
 
 function renderSidebar(user) {
