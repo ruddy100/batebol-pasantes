@@ -1901,7 +1901,22 @@ async function doLogin() {
     await loadAllData();
     showApp();
   } catch (err) {
-    toast(err.message || 'Credenciales inválidas', 'error');
+    // Mensaje de error más claro según el tipo de error
+    let errMsg = 'Credenciales inválidas';
+    if (err.message) {
+      if (err.message.includes('Invalid login') || err.message.includes('invalid_credentials') || err.message.includes('Wrong')) {
+        errMsg = 'Contraseña incorrecta. Verifica e intenta de nuevo.';
+      } else if (err.message.includes('not found') || err.message.includes('No user')) {
+        errMsg = 'No existe una cuenta con ese correo.';
+      } else if (err.message.includes('disabled') || err.message.includes('banned')) {
+        errMsg = 'Esta cuenta está desactivada. Contacta al gestor.';
+      } else if (err.message.includes('Perfil')) {
+        errMsg = err.message;
+      } else {
+        errMsg = 'Contraseña incorrecta. Verifica e intenta de nuevo.';
+      }
+    }
+    toast(errMsg, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Ingresar'; }
   }
 }
@@ -2153,7 +2168,11 @@ async function checkIn() {
   if (user.schedule?.activo === false) { toast('Tu cuenta está desactivada. Contacta al gestor.', 'error'); return; }
   const existing = _db.attendance().find(a => a.userId === user.id && a.fecha === fechaHoyISO());
   if (existing?.horaEntrada) { toast('Ya registraste tu entrada hoy', 'error'); return; }
-  if (!esDiaLaborable(user) && !confirm('Hoy no es día laborable. _Registrar entrada de todas formas?')) return;
+  // Bloquear marcación si no es día laborable ni feriado
+  if (!esDiaLaborable(user)) {
+    toast('Hoy no es un día laborable según tu horario asignado.', 'warning');
+    return;
+  }
   const now = new Date();
   const estado = calcularEstado(now, user);
   try {
@@ -2902,8 +2921,14 @@ function renderPasanteHome(user) {
         ${feriadoHoy ? `
           <button class="punch-btn entry" disabled style="grid-column: 1 / -1; background: var(--bg-elevated); border: 1px dashed rgba(248,81,73,.4); color: var(--danger);">
             <div class="punch-icon" style="background: var(--danger-dim);"><i class="fas fa-star"></i></div>
-            <div class="punch-label" style="font-size: 15px;">Día feriado -- ${feriadoHoy.descripcion}</div>
+            <div class="punch-label" style="font-size: 15px;">Día feriado — ${feriadoHoy.descripcion}</div>
             <div class="punch-time" style="opacity: .8;">No se requiere marcación</div>
+          </button>
+        ` : !esDiaLaborable(user) ? `
+          <button class="punch-btn entry" disabled style="grid-column: 1 / -1; background: var(--bg-elevated); border: 1px dashed var(--border); color: var(--text-muted);">
+            <div class="punch-icon" style="background: var(--bg-hover);"><i class="fas fa-moon"></i></div>
+            <div class="punch-label" style="font-size: 15px;">Hoy no es día laborable</div>
+            <div class="punch-time" style="opacity: .7;">Descansa, no hay marcación programada</div>
           </button>
         ` : `
           <button class="punch-btn entry" onclick="checkIn()" ${yaEntro ? 'disabled' : ''}>
@@ -2927,6 +2952,8 @@ function renderPasanteHome(user) {
           <div class="val">
             ${feriadoHoy
               ? '<span class="badge-pill badge-danger"><span class="dot"></span>Feriado</span>'
+              : !esDiaLaborable(user)
+              ? '<span class="badge-pill badge-muted"><span class="dot"></span>No laborable</span>'
               : yaSalio ? '<span class="badge-pill badge-success"><span class="dot"></span>Completa</span>'
               : yaEntro ? (reg.estado === 'puntual'
                   ? '<span class="badge-pill badge-success"><span class="dot"></span>Puntual</span>'
