@@ -2357,7 +2357,8 @@ async function updateUser(userId, changes) {
   const users = _db.users();
   const u = users.find(x => x.id === userId);
   if (!u) return false;
-  // Email único si cambi_
+
+  // Email único si cambió
   if (changes.email && changes.email.toLowerCase() !== u.email) {
     if (users.some(x => x.id !== userId && x.email.toLowerCase() === changes.email.toLowerCase())) {
       toast('Ya existe una cuenta con ese email', 'error');
@@ -2365,13 +2366,46 @@ async function updateUser(userId, changes) {
     }
     changes.email = changes.email.toLowerCase().trim();
   }
+
+  // Si hay cambio de contraseña, actualizarla en Supabase Auth via Edge Function
+  const newPassword = changes.password;
+  delete changes.password; // no guardar la contraseña en public.users
+
+  if (newPassword && newPassword.length >= 6) {
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      const resp = await fetch(
+        'https://mvnyrblcxeidqsgsqiae.supabase.co/functions/v1/create-user',
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': SUPABASE_KEY,
+          },
+          body: JSON.stringify({ updateUserId: userId, newPassword }),
+        }
+      );
+      const result = await resp.json();
+      if (!resp.ok || result.error) {
+        toast('Error al cambiar contraseña: ' + (result.error || 'intenta de nuevo'), 'error');
+        return false;
+      }
+      toast('Contraseña actualizada correctamente', 'success');
+    } catch (err) {
+      toast('Error al cambiar contraseña: ' + (err.message || ''), 'error');
+      return false;
+    }
+  }
+
+  // Actualizar el perfil en public.users
   Object.assign(u, changes);
   try {
     await db.saveUserRow(u);
     await db.users();
     if (_currentUser && _currentUser.id === userId) _currentUser = mapUser(u);
     return true;
-  } catch(err) { toast('Error al actualizar cuenta: ' + (err.message||''), 'error'); return false; }
+  } catch(err) { toast('Error al actualizar cuenta: ' + (err.message || ''), 'error'); return false; }
 }
 
 /**
@@ -5156,9 +5190,7 @@ function renderProfile(user) {
         <button class="btn btn-secondary" style="justify-content: flex-start;">
           <i class="fas fa-bell"></i> Configurar notificaciones
         </button>
-        <button class="btn btn-secondary" onclick="resetData()" style="justify-content: flex-start; color: var(--warning);">
-          <i class="fas fa-rotate"></i> Reiniciar datos de demo
-        </button>
+
         <button class="btn btn-secondary" onclick="logout()" style="justify-content: flex-start; color: var(--danger);">
           <i class="fas fa-arrow-right-from-bracket"></i> Cerrar sesión
         </button>
