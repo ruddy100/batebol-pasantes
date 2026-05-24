@@ -1262,33 +1262,7 @@ textarea.form-control { min-height: 100px; resize: vertical; font-family: inheri
       </button>
     </form>
 
-    <div class="demo-section">
-      <div class="demo-title"><i class="fas fa-bolt"></i> Acceso rápido demo</div>
-      <button class="demo-btn" onclick="quickLogin('mvalverde@batebol.com')">
-        <div class="demo-avatar av-blue">MV</div>
-        <div class="demo-info">
-          <div class="demo-name">Miguel Valverde</div>
-          <div class="demo-role">Gestor · Desarrollo Humano</div>
-        </div>
-        <i class="fas fa-chevron-right" style="color: var(--text-muted); font-size: 11px;"></i>
-      </button>
-      <button class="demo-btn" onclick="quickLogin('yvillarroel@batebol.com')">
-        <div class="demo-avatar av-purple">YV</div>
-        <div class="demo-info">
-          <div class="demo-name">Yobana Villarroel</div>
-          <div class="demo-role">Gestor · Desarrollo Humano</div>
-        </div>
-        <i class="fas fa-chevron-right" style="color: var(--text-muted); font-size: 11px;"></i>
-      </button>
-      <button class="demo-btn" onclick="quickLogin('dantelo@batebol.com')">
-        <div class="demo-avatar av-pink">DA</div>
-        <div class="demo-info">
-          <div class="demo-name">Dania Antelo</div>
-          <div class="demo-role">Gestor · Desarrollo Humano</div>
-        </div>
-        <i class="fas fa-chevron-right" style="color: var(--text-muted); font-size: 11px;"></i>
-      </button>
-    </div>
+
   </div>
 </div>
 
@@ -2443,13 +2417,45 @@ async function deleteUser(userId) {
   const u = _db.users().find(x => x.id === userId);
   if (!u) return;
   if (u.rol === 'gestor') { toast('No se puede eliminar al gestor', 'error'); return; }
-  if (!confirm(`¿Eliminar permanentemente la cuenta de ${u.nombre}? Se borrar_n también sus asistencias y actividades.`)) return;
+  if (!confirm(`¿Eliminar permanentemente la cuenta de ${u.nombre}?\nSe borrarán también sus asistencias, actividades e informes.`)) return;
 
-  localStorage.setItem('ph_users', JSON.stringify(_db.users().filter(x => x.id !== userId)));
-  db.saveAttendance(_db.attendance().filter(a => a.userId !== userId));
-  db.saveActivities(_db.activities().filter(a => a.userId !== userId));
-  toast(`Cuenta eliminada: ${u.nombre}`, 'success');
-  renderApp();
+  try {
+    // 1. Eliminar datos relacionados primero
+    await sb.from('attendance').delete().eq('user_id', userId);
+    await sb.from('activities').delete().eq('user_id', userId);
+    await sb.from('informes').delete().eq('user_id', userId);
+    await sb.from('permisos').delete().eq('user_id', userId);
+    await sb.from('bonos').delete().eq('user_id', userId);
+    await sb.from('notifications').delete().eq('user_id', userId);
+
+    // 2. Eliminar el perfil de public.users
+    const { error: userError } = await sb.from('users').delete().eq('id', userId);
+    if (userError) throw userError;
+
+    // 3. Eliminar de auth.users via Edge Function (requiere service_role)
+    const { data: { session } } = await sb.auth.getSession();
+    await fetch(
+      'https://mvnyrblcxeidqsgsqiae.supabase.co/functions/v1/create-user',
+      {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': SUPABASE_KEY,
+        },
+        body: JSON.stringify({ deleteUserId: userId }),
+      }
+    ).catch(() => {}); // Si falla auth delete, el perfil ya fue eliminado
+
+    // 4. Refrescar caché
+    cacheClear('users', 'att', 'act', 'inf', 'pm', 'bon');
+    await db.users();
+
+    toast(`Cuenta eliminada: ${u.nombre}`, 'success');
+    renderApp();
+  } catch (err) {
+    toast('Error al eliminar: ' + (err.message || 'intenta de nuevo'), 'error');
+  }
 }
 
 /**
