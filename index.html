@@ -2018,6 +2018,44 @@ function calcularEstado(date, user) {
 }
 
 /**
+ * Devuelve el estado efectivo de un registro de asistencia considerando
+ * permisos aprobados. Si hay un permiso aprobado que cubre la entrada,
+ * una tardanza se convierte en 'puntual'.
+ */
+function getEstadoEfectivo(att) {
+  if (!att || att.estado !== 'tardanza') return att?.estado || 'puntual';
+  // Buscar permiso aprobado que cubra entrada en esa fecha para ese usuario
+  const tienePermiso = _db.permisos().some(p =>
+    p.userId === att.userId &&
+    p.fecha === att.fecha &&
+    p.estado === 'aprobado' &&
+    p.cubreEntrada
+  );
+  return tienePermiso ? 'puntual' : 'tardanza';
+}
+
+/**
+ * Cuenta puntuales y tardanzas de un array de asistencias
+ * aplicando la lógica de permisos.
+ */
+function contarEstados(attArray) {
+  let puntuales = 0, tardanzas = 0;
+  attArray.forEach(a => {
+    const estado = getEstadoEfectivo(a);
+    if (estado === 'puntual') puntuales++;
+    else tardanzas++;
+  });
+  return { puntuales, tardanzas };
+}
+
+function calcularEstado(date, user) {
+  const sched = getUserSchedule(user);
+  const totalMin = date.getHours() * 60 + date.getMinutes();
+  const limiteMin = timeToMinutes(sched.horaEntrada) + (sched.toleranciaMin || 0);
+  return totalMin <= limiteMin ? 'puntual' : 'tardanza';
+}
+
+/**
  * Verifica si hoy es día laborable según el horario del pasante.
  * Un día feriado global también se considera no laborable.
  */
@@ -2864,8 +2902,8 @@ function renderPasanteHome(user) {
   const ahora = new Date();
   const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
   const attMes = att.filter(a => a.fecha >= inicioMes);
-  const puntuales = attMes.filter(a => a.estado === 'puntual').length;
-  const tardanzas = attMes.filter(a => a.estado === 'tardanza').length;
+  const puntuales = contarEstados(attMes).puntuales;
+  const tardanzas = contarEstados(attMes).tardanzas;
   const horasMes = attMes.reduce((acc, a) => {
     if (a.horaEntrada && a.horaSalida) return acc + (new Date(a.horaSalida) - new Date(a.horaEntrada)) / 3600000;
     return acc;
@@ -3091,7 +3129,7 @@ function renderPasanteHome(user) {
 function renderPasanteAttendance(user) {
   const records = _db.attendance().filter(a => a.userId === user.id).sort((a, b) => b.fecha.localeCompare(a.fecha));
   const total = records.length;
-  const puntuales = records.filter(a => a.estado === 'puntual').length;
+  const { puntuales, tardanzas: tardanzasCount } = contarEstados(records);
 
   // Permisos aprobados indexados por fecha para mostrar en la tabla
   const permisosMap = {};
@@ -3430,8 +3468,8 @@ function renderEncargadoHome(user) {
   const ahora = new Date();
   const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
   const attMes = att.filter(a => a.fecha >= inicioMes);
-  const puntuales = attMes.filter(a => a.estado === 'puntual').length;
-  const tardanzas = attMes.filter(a => a.estado === 'tardanza').length;
+  const puntuales = contarEstados(attMes).puntuales;
+  const tardanzas = contarEstados(attMes).tardanzas;
   const presentesHoy = att.filter(a => a.fecha === hoy && a.horaEntrada).length;
   const punt = attMes.length > 0 ? Math.round(puntuales / attMes.length * 100) : 0;
 
@@ -3518,10 +3556,10 @@ function renderEncargadoHome(user) {
               const aHoy = att.find(a => a.userId === p.id && a.fecha === hoy);
               const pAttMes = attMes.filter(a => a.userId === p.id);
               const pActsMes = acts.filter(a => a.userId === p.id && a.fecha >= inicioMes);
-              const pPunt = pAttMes.length > 0 ? Math.round(pAttMes.filter(a => a.estado === 'puntual').length / pAttMes.length * 100) : 0;
+              const pPunt = pAttMes.length > 0 ? Math.round(contarEstados(pAttMes).puntuales / pAttMes.length * 100) : 0;
               let estado = '<span class="badge-pill badge-muted"><span class="dot"></span>Sin registro</span>';
               if (aHoy?.horaEntrada) {
-                estado = aHoy.estado === 'puntual'
+                estado = getEstadoEfectivo(aHoy) === 'puntual'
                   ? '<span class="badge-pill badge-success"><span class="dot"></span>Puntual</span>'
                   : '<span class="badge-pill badge-warning"><span class="dot"></span>Tardanza</span>';
               }
@@ -3607,12 +3645,12 @@ function renderTeam(user) {
               const aHoy = att.find(a => a.userId === p.id && a.fecha === hoy);
               const pAttMes = att.filter(a => a.userId === p.id && a.fecha >= inicioMes);
               const pActsMes = acts.filter(a => a.userId === p.id && a.fecha >= inicioMes);
-              const pPunt = pAttMes.length > 0 ? Math.round(pAttMes.filter(a => a.estado === 'puntual').length / pAttMes.length * 100) : 0;
+              const pPunt = pAttMes.length > 0 ? Math.round(contarEstados(pAttMes).puntuales / pAttMes.length * 100) : 0;
               const activo = isUserActive(p);
               let estado;
               if (!activo) estado = '<span class="badge-pill badge-muted"><span class="dot"></span>Inactivo</span>';
               else if (aHoy?.horaEntrada) {
-                estado = aHoy.estado === 'puntual'
+                estado = getEstadoEfectivo(aHoy) === 'puntual'
                   ? '<span class="badge-pill badge-success"><span class="dot"></span>Puntual</span>'
                   : '<span class="badge-pill badge-warning"><span class="dot"></span>Tardanza</span>';
               } else {
@@ -3736,7 +3774,7 @@ function renderAttendanceList(user) {
               const p = pasantes.find(u => u.id === a.userId);
               const h = a.horaEntrada && a.horaSalida ? ((new Date(a.horaSalida) - new Date(a.horaEntrada)) / 3600000).toFixed(1) : '--';
               return `
-                <tr data-pasante="${a.userId}" data-area="${p?.area}" data-estado="${a.estado}" data-date="${a.fecha}">
+                <tr data-pasante="${a.userId}" data-area="${p?.area}" data-estado="${getEstadoEfectivo(a)}" data-date="${a.fecha}">
                   <td><span style="font-family: var(--mono); font-size: 12px;">${a.fecha}</span></td>
                   <td>
                     <div class="user-cell">
@@ -4036,8 +4074,8 @@ function renderGestorHome(user) {
   const ahora = new Date();
   const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
   const attMes = att.filter(a => a.fecha >= inicioMes);
-  const puntuales = attMes.filter(a => a.estado === 'puntual').length;
-  const tardanzasHoy = att.filter(a => a.fecha === hoy && a.estado === 'tardanza').length;
+  const { puntuales } = contarEstados(attMes);
+  const tardanzasHoy = att.filter(a => a.fecha === hoy && getEstadoEfectivo(a) === 'tardanza').length;
   const presentesHoy = att.filter(a => a.fecha === hoy && a.horaEntrada).length;
   const actsMes = acts.filter(a => a.fecha >= inicioMes);
   const areas = [...new Set(pasantes.map(p => p.area))];
@@ -4137,7 +4175,7 @@ function renderGestorHome(user) {
             ${pasantes.map(p => {
               const pAttMes = attMes.filter(a => a.userId === p.id);
               const pActsMes = actsMes.filter(a => a.userId === p.id);
-              const pPunt = pAttMes.length > 0 ? (pAttMes.filter(a => a.estado === 'puntual').length / pAttMes.length * 100) : 0;
+              const pPunt = pAttMes.length > 0 ? (contarEstados(pAttMes).puntuales / pAttMes.length * 100) : 0;
               const score = Math.round(pPunt * 0.5 + Math.min(pAttMes.length / 20 * 100, 100) * 0.3 + Math.min(pActsMes.length / 15 * 100, 100) * 0.2);
               return { ...p, pAttMes, pActsMes, pPunt: Math.round(pPunt), score };
             }).sort((a, b) => b.score - a.score).slice(0, 5).map((p, i) => `
@@ -4181,7 +4219,7 @@ function renderAnalytics(user) {
     const ids = areaPas.map(p => p.id);
     const aAtt = att.filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
     const aActs = acts.filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
-    const punt = aAtt.length > 0 ? Math.round(aAtt.filter(a => a.estado === 'puntual').length / aAtt.length * 100) : 0;
+    const punt = aAtt.length > 0 ? Math.round(contarEstados(aAtt).puntuales / aAtt.length * 100) : 0;
     return { area, pasantes: areaPas.length, asistencias: aAtt.length, actividades: aActs.length, puntualidad: punt };
   });
 
@@ -5328,7 +5366,7 @@ function showPasanteDetail(userId) {
   const ahora = new Date();
   const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
   const attMes = _db.attendance().filter(a => a.userId === userId && a.fecha >= inicioMes);
-  const punt = attMes.length > 0 ? Math.round(attMes.filter(a => a.estado === 'puntual').length / attMes.length * 100) : 0;
+  const punt = attMes.length > 0 ? Math.round(contarEstados(attMes).puntuales / attMes.length * 100) : 0;
 
   openModal(`
     <div class="modal-header">
@@ -7031,7 +7069,7 @@ function buildReportHTML(userId, mes, anio) {
   const permisosMes = _db.permisos().filter(p =>
     p.userId === userId && p.estado === 'aprobado' && p.fecha && p.fecha.startsWith(mesStr)
   );
-  const puntuales=att.filter(a=>a.estado==='puntual').length;
+  const puntuales=contarEstados(att).puntuales;
   const tardanzas=att.filter(a=>a.estado==='tardanza').length;
   const horas=att.reduce((s,a)=>{
     if(a.horaEntrada&&a.horaSalida) return s+(new Date(a.horaSalida)-new Date(a.horaEntrada))/3600000;
@@ -7114,7 +7152,7 @@ function buildReportHTML(userId, mes, anio) {
             <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaEntrada)}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaSalida)}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;">
-              <span style="background:${a.estado==='puntual'?'#d4edda':'#fff3cd'};color:${a.estado==='puntual'?'#155724':'#856404'};padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;">${a.estado}</span>
+              <span style="background:${getEstadoEfectivo(a)==='puntual'?'#d4edda':'#fff3cd'};color:${getEstadoEfectivo(a)==='puntual'?'#155724':'#856404'};padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;">${getEstadoEfectivo(a)}</span>
             </td>
           </tr>`;
         }).join('')}
@@ -7320,7 +7358,7 @@ function initCharts() {
     const ahora = new Date();
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
     const att = _db.attendance().filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
-    const puntuales = att.filter(a => a.estado === 'puntual').length;
+    const puntuales = contarEstados(att).puntuales;
     const tardanzas = att.filter(a => a.estado === 'tardanza').length;
     chartsRegistry['chartTeamDist'] = new Chart(elTD, {
       type: 'doughnut',
@@ -7349,7 +7387,7 @@ function initCharts() {
       const iso = d.toISOString().slice(0, 10);
       labels.push(d.toLocaleDateString('es-BO', { day: '2-digit', month: 'short' }));
       const dayAtt = _db.attendance().filter(a => a.fecha === iso);
-      punt.push(dayAtt.filter(a => a.estado === 'puntual').length);
+      punt.push(contarEstados(dayAtt).puntuales);
       tard.push(dayAtt.filter(a => a.estado === 'tardanza').length);
     }
     chartsRegistry['chartGestorTrend'] = new Chart(elGT, {
@@ -7401,7 +7439,7 @@ function initCharts() {
     const data = areas.map(area => {
       const ids = pasantes.filter(p => p.area === area).map(p => p.id);
       const att = _db.attendance().filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
-      return att.length > 0 ? Math.round(att.filter(a => a.estado === 'puntual').length / att.length * 100) : 0;
+      return att.length > 0 ? Math.round(contarEstados(att).puntuales / att.length * 100) : 0;
     });
     chartsRegistry['chartAnalyticsArea'] = new Chart(elAA, {
       type: 'bar',
@@ -7431,7 +7469,7 @@ function initCharts() {
     const ahora = new Date();
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
     const att = _db.attendance().filter(a => a.fecha >= inicioMes);
-    const puntuales = att.filter(a => a.estado === 'puntual').length;
+    const puntuales = contarEstados(att).puntuales;
     const tardanzas = att.filter(a => a.estado === 'tardanza').length;
     chartsRegistry['chartAnalyticsEstado'] = new Chart(elAE, {
       type: 'doughnut',
