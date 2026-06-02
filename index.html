@@ -1459,7 +1459,7 @@ async function loadNotifs() {
   _cache._notifs = data.map(n => ({
     id: n.id, userId: n.user_id, tipo: n.tipo, icono: n.icono,
     titulo: n.titulo, desc: n.descripcion, accion: n.accion_tab ? { tab: n.accion_tab } : null,
-    leida: n.leida, creadoEn: n.createdíat,
+    leida: n.leida, creadoEn: n.created_at,
   }));
   refreshNotifBadge();
 }
@@ -1654,7 +1654,7 @@ const db = {
   activities: async () => { const c = cacheGet('act');   if (c) return c; const { data } = await sb.from('activities').select('*').order('fecha', { ascending: false }); cacheSet('act', data || []); return data || []; },
   feriados:   async () => { const c = cacheGet('fer');   if (c) return c; const { data } = await sb.from('feriados').select('*').order('fecha');                          cacheSet('fer', data || []); return data || []; },
   informes:   async () => { const c = cacheGet('inf');   if (c) return c; const { data } = await sb.from('informes').select('*');                                         cacheSet('inf', data || []); return data || []; },
-  permisos:   async () => { const c = cacheGet('pm');    if (c) return c; const { data } = await sb.from('permisos').select('*').order('createdíat', { ascending: false }); cacheSet('pm', data || []); return data || []; },
+  permisos:   async () => { const c = cacheGet('pm');    if (c) return c; const { data } = await sb.from('permisos').select('*').order('created_at', { ascending: false }); cacheSet('pm', data || []); return data || []; },
   bonos:      async () => { const c = cacheGet('bon');   if (c) return c; const { data } = await sb.from('bonos').select('*');                                            cacheSet('bon', data || []); return data || []; },
 
   /* __ Escritura -- invalidan cach_ de la tabla afectada __ */
@@ -1679,7 +1679,7 @@ const db = {
   saveActivityRow: async (row) => {
     cacheClear('act');
     if (row.id && !row.id.startsWith('tmp')) {
-      const { error } = await sb.from('activities').update({ descripcion: row.descripcion, updatedíat: new Date().toISOString() }).eq('id', row.id);
+      const { error } = await sb.from('activities').update({ descripcion: row.descripcion, updated_at: new Date().toISOString() }).eq('id', row.id);
       if (error) throw error;
     } else {
       const { data, error } = await sb.from('activities').insert({ user_id: row.userId, fecha: row.fecha, descripcion: row.descripcion }).select().single();
@@ -1765,7 +1765,7 @@ const db = {
     });
   },
   getNotifs: async (userId) => {
-    const { data } = await sb.from('notifications').select('*').eq('user_id', userId).order('createdíat', { ascending: false }).limit(50);
+    const { data } = await sb.from('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50);
     return data || [];
   },
   markNotifRead: async (id) => { await sb.from('notifications').update({ leida: true }).eq('id', id); },
@@ -1795,11 +1795,11 @@ function mapAtt(r) {
 }
 function mapAct(r) {
   if (!r) return null;
-  return { id: r.id, userId: r.user_id, fecha: r.fecha, descripcion: r.descripcion, createdAt: r.createdíat };
+  return { id: r.id, userId: r.user_id, fecha: r.fecha, descripcion: r.descripcion, createdAt: r.created_at };
 }
 function mapFeriado(r) {
   if (!r) return null;
-  return { id: r.id, fecha: r.fecha, descripcion: r.descripcion, creadoPor: r.creado_por, creadoEn: r.createdíat };
+  return { id: r.id, fecha: r.fecha, descripcion: r.descripcion, creadoPor: r.creado_por, creadoEn: r.created_at };
 }
 function mapInforme(r) {
   if (!r) return null;
@@ -1818,7 +1818,7 @@ function mapPermiso(r) {
     turno: r.turno, horaInicio: r.hora_inicio, horaFin: r.hora_fin,
     motivo: r.motivo, cubreEntrada: r.cubre_entrada,
     estado: r.estado, respondidoPor: r.respondido_por,
-    respondidoEn: r.respondido_en, creadoEn: r.createdíat,
+    respondidoEn: r.respondido_en, creadoEn: r.created_at,
   };
 }
 function mapBono(r) {
@@ -2021,7 +2021,7 @@ function esFeriado(iso) {
  */
 async function agregarFeriado(fecha, descripcion) {
   if (_db.feriados().some(f => f.fecha === fecha)) {
-    toast('Esa fecha ya está registrada como feriado', 'error');
+    toast('Ya existe un feriado registrado para esa fecha', 'warning');
     return false;
   }
   try {
