@@ -1549,9 +1549,9 @@ function renderNotifPanel() {
 }
 
 /** Al hacer clic en una notificación: marcar leída y navegar si tiene acción. */
-function clickNotif(notifId) {
+async function clickNotif(notifId) {
   const n = db_notif.all().find(x => x.id === notifId);
-  markRead(notifId);
+  await markRead(notifId);
   if (n?.accion?.tab) {
     toggleNotifPanel();
     changeTab(n.accion.tab);
@@ -1845,10 +1845,12 @@ const _db = {
 /* __ Carga inicial de todos los datos __ */
 async function loadAllData() {
   showLoader('Cargando datos...');
+  cacheClearAll(); // siempre partir de datos frescos
   await Promise.all([
-    _db.users(), _db.attendance(), _db.activities(),
-    _db.feriados(), _db.informes(), _db.permisos(), _db.bonos(),
+    db.users(), db.attendance(), db.activities(),
+    db.feriados(), db.informes(), db.permisos(), db.bonos(),
   ]);
+  await loadNotifs();
   hideLoader();
 }
 
@@ -1952,12 +1954,6 @@ async function initApp() {
 
 
 
-function resetData() {
-  if (confirm('¿Borrar todos los datos y reiniciar la demo?')) {
-    localStorage.clear();
-    location.reload();
-  }
-}
 
 /* ============================================================
    ASISTENCIA -- Lógica
@@ -2142,7 +2138,7 @@ function checkVigencias() {
 /**
  * Extiende la fecha de fin de pasantía de un pasante y reactiva su cuenta.
  */
-function extenderPasantia(userId, nuevaFechaFin) {
+async function extenderPasantia(userId, nuevaFechaFin) {
   const users = _db.users();
   const u = users.find(x => x.id === userId);
   if (!u) return;
@@ -2151,11 +2147,8 @@ function extenderPasantia(userId, nuevaFechaFin) {
     u.schedule.activo = true;
     delete u.schedule._autoDesactivado;
   }
-  localStorage.setItem('ph_users', JSON.stringify(users));
-  const current = getCurrentUser();
-  if (current && current.id === userId) {
-    localStorage.setItem('ph_currentUser', JSON.stringify(u));
-  }
+  try { await db.saveUserRow(u); await db.users(); } catch(e) { toast('Error al extender','error'); return; }
+  if (_currentUser?.id === userId) _currentUser = mapUser(u);
   toast(`Pasantía extendida hasta ${formatDateFull(nuevaFechaFin)}`, 'success');
 }
 
@@ -2163,36 +2156,56 @@ function asistenciaHoy(userId) {
   return _db.attendance().find(a => a.userId === userId && a.fecha === fechaHoyISO());
 }
 
+let _marcandoEntrada = false;
+let _marcandoSalida  = false;
+
 async function checkIn() {
+  if (_marcandoEntrada) { toast('Procesando...', 'info'); return; }
   const user = getCurrentUser();
   if (user.schedule?.activo === false) { toast('Tu cuenta está desactivada. Contacta al gestor.', 'error'); return; }
-  const existing = _db.attendance().find(a => a.userId === user.id && a.fecha === fechaHoyISO());
-  if (existing?.horaEntrada) { toast('Ya registraste tu entrada hoy', 'error'); return; }
-  // Bloquear marcación si no es día laborable ni feriado
-  if (!esDiaLaborable(user)) {
-    toast('Hoy no es un día laborable según tu horario asignado.', 'warning');
-    return;
-  }
+  if (!esDiaLaborable(user)) { toast('Hoy no es un día laborable según tu horario asignado.', 'warning'); return; }
+
+  // Verificar directamente en Supabase (no caché) para evitar falsos negativos
+  const { data: existing } = await sb.from('attendance')
+    .select('id, hora_entrada, hora_salida, estado')
+    .eq('user_id', user.id)
+    .eq('fecha', fechaHoyISO())
+    .maybeSingle();
+
+  if (existing?.hora_entrada) { toast('Ya registraste tu entrada hoy', 'error'); await db.attendance(); renderApp(); return; }
+
+  _marcandoEntrada = true;
+  const btn = document.querySelector('.punch-btn.entry');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+
   const now = new Date();
   const estado = calcularEstado(now, user);
   try {
-    await db.saveAttendanceRow({ id: existing?.id, userId: user.id, fecha: fechaHoyISO(), horaEntrada: now.toISOString(), horaSalida: existing?.horaSalida || null, estado });
-    await db.attendance();
-    const lbl = estado === 'puntual' ? '&#x2713;#10003; Puntual' : '_ Tardanza';
+    await db.saveAttendanceRow({ userId: user.id, fecha: fechaHoyISO(), horaEntrada: now.toISOString(), horaSalida: null, estado });
+    await db.attendance(); // refrescar caché con dato real
+    const lbl = estado === 'puntual' ? 'Puntual' : 'Tardanza';
     toast(`Entrada registrada a las ${fmtTime(now.toISOString())} · ${lbl}`, estado === 'puntual' ? 'success' : 'warning');
-    pushNotif(user.id, { tipo: estado === 'puntual' ? 'success' : 'warning', icono: 'fa-arrow-right-to-bracket', titulo: `Entrada registrada -- ${estado}`, desc: `${fechaHoyISO()} a las ${fmtTime(now.toISOString())}`, accion: { tab: 'attendance' } });
+    pushNotif(user.id, { tipo: estado === 'puntual' ? 'success' : 'warning', icono: 'fa-arrow-right-to-bracket', titulo: `Entrada registrada — ${estado}`, desc: `${fechaHoyISO()} a las ${fmtTime(now.toISOString())}`, accion: { tab: 'attendance' } });
     renderApp();
   } catch (err) { toast('Error al registrar: ' + (err.message || 'intenta de nuevo'), 'error'); }
+  finally { _marcandoEntrada = false; }
 }
 
 async function checkOut() {
+  if (_marcandoSalida) { toast('Procesando...', 'info'); return; }
   const user = getCurrentUser();
-  const records = _db.attendance();
-  const today = records.find(a => a.userId === user.id && a.fecha === fechaHoyISO());
-  if (!today || !today.horaEntrada) { toast('Primero registra tu entrada', 'error'); return; }
-  if (today.horaSalida) { toast('Ya registraste tu salida hoy', 'error'); return; }
 
-  // Validar que tenga al menos una actividad registrada hoy
+  // Verificar directamente en Supabase para evitar falsos negativos por caché
+  const { data: today } = await sb.from('attendance')
+    .select('id, hora_entrada, hora_salida, estado, fecha')
+    .eq('user_id', user.id)
+    .eq('fecha', fechaHoyISO())
+    .maybeSingle();
+
+  if (!today || !today.hora_entrada) { toast('Primero registra tu entrada', 'error'); await db.attendance(); renderApp(); return; }
+  if (today.hora_salida) { toast('Ya registraste tu salida hoy', 'error'); await db.attendance(); renderApp(); return; }
+
+  const todayMapped = mapAtt(today);
   const actsHoy = _db.activities().filter(a => a.userId === user.id && a.fecha === fechaHoyISO());
   if (actsHoy.length === 0) {
     openModal(`
@@ -2229,13 +2242,17 @@ async function checkOut() {
   }
 
   const horaSalida = new Date().toISOString();
+  _marcandoSalida = true;
+  const btn = document.querySelector('.punch-btn.exit');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
   try {
-    await db.saveAttendanceRow({ id: today.id, userId: user.id, fecha: today.fecha, horaEntrada: today.horaEntrada, horaSalida, estado: today.estado });
+    await db.saveAttendanceRow({ id: todayMapped.id, userId: user.id, fecha: todayMapped.fecha, horaEntrada: todayMapped.horaEntrada, horaSalida, estado: todayMapped.estado });
     await db.attendance();
     toast('Salida registrada a las ' + fmtTime(horaSalida), 'success');
     pushNotif(user.id, { tipo: 'success', icono: 'fa-arrow-right-from-bracket', titulo: 'Salida registrada', desc: `${fechaHoyISO()} a las ${fmtTime(horaSalida)}`, accion: { tab: 'attendance' } });
     renderApp();
   } catch (err) { toast('Error al registrar salida: ' + (err.message || ''), 'error'); }
+  finally { _marcandoSalida = false; }
 }
 
 /* ============================================================
@@ -2430,8 +2447,8 @@ async function updateUser(userId, changes) {
 /**
  * Actualiza solo el horario de un pasante.
  */
-function updateUserSchedule(userId, schedule) {
-  return updateUser(userId, { schedule });
+async function updateUserSchedule(userId, schedule) {
+  return await updateUser(userId, { schedule });
 }
 
 /**
@@ -2634,11 +2651,11 @@ function setExtFecha(dias) {
   if (el) el.value = base.toISOString().slice(0, 10);
 }
 
-function confirmarExtension(userId) {
+async function confirmarExtension(userId) {
   const fecha = document.getElementById('extFechaFin')?.value;
   if (!fecha) { toast('Selecciona la nueva fecha de fin', 'error'); return; }
   if (fecha <= fechaHoyISO()) { toast('La nueva fecha debe ser posterior a hoy', 'error'); return; }
-  extenderPasantia(userId, fecha);
+  await extenderPasantia(userId, fecha);
   closeModal();
   renderApp();
 }
@@ -3339,12 +3356,12 @@ function openCalActivityDetail(actId) {
     </div>
     <div class="modal-footer">
       ${esEditable ? `
-        <button class="btn btn-danger" onclick="closeModal(); deleteActivity('${actId}')">
+        <button class="btn btn-danger" onclick="deleteActivity('${actId}').catch(e=>toast(e.message,'error'))">
           <i class="fas fa-trash"></i> Eliminar
         </button>
         <div style="flex: 1;"></div>
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-        <button class="btn btn-primary" onclick="saveCalActivity('${actId}')">
+        <button class="btn btn-primary" onclick="saveCalActivity('${actId}').catch(e=>toast(e.message,'error'))">
           <i class="fas fa-check"></i> Guardar cambios
         </button>
       ` : `
@@ -4389,10 +4406,10 @@ function renderAccounts(user) {
                       <button class="icon-btn" title="Editar cuenta" onclick="event.stopPropagation(); openUserModal('${u.rol}','${u.id}')" style="width:32px;height:32px;">
                         <i class="fas fa-pen"></i>
                       </button>
-                      <button class="icon-btn" title="${activo?'Desactivar':'Activar'}" onclick="event.stopPropagation(); toggleUserActive('${u.id}'); renderApp();" style="width:32px;height:32px;${activo?'color:var(--warning);':'color:var(--success);'}">
+                      <button class="icon-btn" title="${activo?'Desactivar':'Activar'}" onclick="event.stopPropagation(); toggleUserActive('${u.id}').then(()=>renderApp());" style="width:32px;height:32px;${activo?'color:var(--warning);':'color:var(--success);'}">
                         <i class="fas ${activo ? 'fa-circle-pause' : 'fa-circle-play'}"></i>
                       </button>
-                      <button class="icon-btn" title="Eliminar" onclick="event.stopPropagation(); deleteUser('${u.id}')" style="width:32px;height:32px;color:var(--danger);">
+                      <button class="icon-btn" title="Eliminar" onclick="event.stopPropagation(); deleteUser('${u.id}').catch(e=>toast(e.message,'error'))" style="width:32px;height:32px;color:var(--danger);">
                         <i class="fas fa-trash"></i>
                       </button>
                     </div>
@@ -4644,7 +4661,7 @@ function readScheduleFromForm(prefix) {
   };
 }
 
-function saveUserFromModal(rol, userId) {
+async function saveUserFromModal(rol, userId) {
   const nombre = document.getElementById('uNombre').value.trim();
   const email = document.getElementById('uEmail').value.trim();
   const password = document.getElementById('uPassword').value;
@@ -4677,7 +4694,7 @@ function saveUserFromModal(rol, userId) {
       const mb = document.getElementById('uMontoBono')?.value;
       if (mb !== undefined) changes.montoBono = parseFloat(mb) || 0;
     }
-    if (updateUser(userId, changes)) {
+    if (await updateUser(userId, changes)) {
       toast('Cuenta actualizada', 'success');
       closeModal();
       renderApp();
@@ -4691,7 +4708,7 @@ function saveUserFromModal(rol, userId) {
       data.fechaFin = fechaFin;
       data.montoBono = parseFloat(document.getElementById('uMontoBono')?.value) || 0;
     }
-    if (createUser(data)) {
+    if (await createUser(data)) {
       closeModal();
       renderApp();
     }
@@ -4910,7 +4927,7 @@ function renderFeriados(user) {
     const esWeekend = (() => { const d = new Date(anioState,mesState,diaNum).getDay(); return d===0||d===6; })();
     celdas += `
       <div class="fer-cell ${esFer?'fer-marcado':''} ${esHoy?'fer-hoy':''} ${esPasado?'fer-pasado':''} ${esWeekend?'fer-weekend':''}"
-           onclick="${esFer ? `eliminarFeriadoFecha('${iso}')` : `openAddFeriado('${iso}')`}"
+           onclick="${esFer ? `eliminarFeriadoFecha('${iso}').catch(e=>toast(e.message,'error'))` : `openAddFeriado('${iso}')`}"
            title="${esFer ? 'Clic para eliminar feriado' : (esPasado ? 'No se pueden registrar feriados en el pasado' : 'Clic para marcar como feriado')}">
         <span class="fer-num ${esHoy?'fer-hoy-num':''}">${diaNum}</span>
         ${esFer ? '<i class="fas fa-star" style="font-size:9px;opacity:.7;"></i>' : ''}
@@ -4973,7 +4990,7 @@ function renderFeriados(user) {
                       ${formatDateFull(f.fecha)}
                     </div>
                   </div>
-                  <button class="icon-btn" title="Eliminar feriado" onclick="confirmarEliminarFeriado('${f.id}')" style="width:30px;height:30px;color:var(--danger);">
+                  <button class="icon-btn" title="Eliminar feriado" onclick="confirmarEliminarFeriado('${f.id}').catch(e=>toast(e.message,'error'))" style="width:30px;height:30px;color:var(--danger);">
                     <i class="fas fa-trash"></i>
                   </button>
                 </div>
@@ -5007,7 +5024,7 @@ function renderFeriados(user) {
                       ${formatDateFull(f.fecha)}
                     </div>
                   </div>
-                  <button class="icon-btn" title="Eliminar" onclick="confirmarEliminarFeriado('${f.id}')" style="width:28px;height:28px;color:var(--text-muted);">
+                  <button class="icon-btn" title="Eliminar" onclick="confirmarEliminarFeriado('${f.id}').catch(e=>toast(e.message,'error'))" style="width:28px;height:28px;color:var(--text-muted);">
                     <i class="fas fa-trash"></i>
                   </button>
                 </div>
@@ -5057,7 +5074,7 @@ function openAddFeriado(fechaPreseleccionada) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" style="background:var(--danger);" onclick="guardarFeriado()">
+      <button class="btn btn-primary" style="background:var(--danger);" onclick="guardarFeriado().catch(e=>toast(e.message,'error'))">
         <i class="fas fa-check"></i> Registrar feriado
       </button>
     </div>
@@ -5076,7 +5093,7 @@ async function guardarFeriado() {
 async function eliminarFeriadoFecha(iso) {
   const f = _db.feriados().find(x => x.fecha === iso);
   if (!f) return;
-  await confirmarEliminarFeriado(f.id);
+  await confirmarEliminarFeriado(f.id).catch(e=>toast(e.message,'error'));
 }
 
 async function confirmarEliminarFeriado(id) {
@@ -5258,7 +5275,7 @@ function openActivityModal(actId) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveActivityFromModal('${actId || ''}')">
+      <button class="btn btn-primary" onclick="saveActivityFromModal('${actId || ''}').catch(e=>toast(e.message,'error'))">
         <i class="fas fa-check"></i> ${actId ? 'Actualizar' : 'Guardar actividad'}
       </button>
     </div>
@@ -5873,7 +5890,8 @@ function openSolicitarPermisoModal(userId) {
         <!-- Fecha -->
         <div class="form-group">
           <label class="form-label">Fecha *</label>
-          <input type="date" class="form-control" id="pmFecha">
+          <input type="date" class="form-control" id="pmFecha" value="${fechaHoyISO()}">
+          <small style="font-size:11px;color:var(--text-muted);margin-top:3px;">Puedes seleccionar hoy o fechas anteriores para justificar tardanzas pasadas.</small>
         </div>
 
         <!-- Turno -- solo para medio_dia -->
@@ -5944,7 +5962,7 @@ function setPmTipo(tipo) {
   if (aviso) aviso.innerHTML = `<i class="fas fa-circle-info" style="color:var(--accent);margin-right:6px;"></i>${avisos[tipo]}`;
 }
 
-function guardarPermiso(userId) {
+async function guardarPermiso(userId) {
   const tipo   = document.querySelector('input[name="pmTipo"]:checked')?.value;
   const fecha  = document.getElementById('pmFecha')?.value;
   const motivo = document.getElementById('pmMotivo')?.value.trim();
@@ -5953,7 +5971,7 @@ function guardarPermiso(userId) {
   const hFin   = document.getElementById('pmHoraFin')?.value;
 
   if (!fecha)             { toast('Selecciona la fecha', 'error'); return; }
-  if (motivo.length < 5)  { toast('Describe el motivo (mínimo 5 caracteres)', 'error'); return; }
+  if (!motivo || motivo.length < 5) { toast('Describe el motivo (mínimo 5 caracteres)', 'error'); return; }
   if (tipo === 'horas' && (!hIni || !hFin)) { toast('Indica el rango de horas', 'error'); return; }
   if (tipo === 'horas' && hFin <= hIni)     { toast('La hora de fin debe ser posterior a la de inicio', 'error'); return; }
 
@@ -5962,7 +5980,9 @@ function guardarPermiso(userId) {
     horaInicio: tipo === 'horas' ? hIni : null,
     horaFin:    tipo === 'horas' ? hFin : null,
   };
-  if (solicitarPermiso(userId, datos)) { closeModal(); renderApp(); }
+
+  const ok = await solicitarPermiso(userId, datos);
+  if (ok) { closeModal(); renderApp(); }
 }
 
 /* ============================================================
@@ -6186,8 +6206,7 @@ function confirmarEnvioInforme(userId, mes, anio) {
       <button class="btn btn-primary" onclick="
         const r = document.getElementById('infReflexion').value.trim();
         if(r.length < 20){ toast('Describe tu aprendizaje del mes (mínimo 20 caracteres)', 'error'); return; }
-        await submitInforme('${userId}',${mes},${anio},r);
-        closeModal(); renderApp();
+        submitInforme('${userId}',${mes},${anio},r).then(()=>{closeModal();renderApp();}).catch(e=>toast(e.message,'error'));
       ">
         <i class="fas fa-paper-plane"></i> Confirmar envío
       </button>
@@ -6315,10 +6334,10 @@ function renderAprobacionInformes(user) {
                   <td>
                     ${p.estado==='pendiente' ? `
                       <div style="display:flex;gap:4px;">
-                        <button class="btn btn-success" style="padding:6px 12px;font-size:12px;" onclick="await responderPermiso('${p.id}','aprobado'); renderApp();">
+                        <button class="btn btn-success" style="padding:6px 12px;font-size:12px;" onclick="responderPermiso('${p.id}','aprobado').then(()=>renderApp()).catch(e=>toast(e.message,'error'));">
                           <i class="fas fa-check"></i> Aprobar
                         </button>
-                        <button class="btn btn-danger" style="padding:6px 12px;font-size:12px;" onclick="await responderPermiso('${p.id}','rechazado'); renderApp();">
+                        <button class="btn btn-danger" style="padding:6px 12px;font-size:12px;" onclick="responderPermiso('${p.id}','rechazado').then(()=>renderApp()).catch(e=>toast(e.message,'error'));">
                           <i class="fas fa-xmark"></i>
                         </button>
                       </div>` : `<span style="color:var(--text-muted);font-size:12px;">Por ${p.respondidoPor||'--'}</span>`}
@@ -6362,7 +6381,7 @@ function openRevisionModal(infId) {
         </button>
         <button class="btn btn-success" onclick="aprobarInforme('${infId}',document.getElementById('revComentario').value); closeModal(); renderApp();">
           <i class="fas fa-check"></i> Aprobar
-        </button>` : `<button class="btn btn-secondary" onclick="await rechazarInforme('${infId}',''); closeModal(); renderApp();">Revertir aprobación</button>`}
+        </button>` : `<button class="btn btn-secondary" onclick="rechazarInforme('${infId}','').then(()=>{closeModal();renderApp();}).catch(e=>toast(e.message,'error'));">Revertir aprobación</button>`}
     </div>
   `, true);
 }
