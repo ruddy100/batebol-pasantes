@@ -1652,7 +1652,19 @@ const db = {
   },
   attendance: async () => { const c = cacheGet('att');   if (c) return c; const { data } = await sb.from('attendance').select('*').order('fecha', { ascending: false }); cacheSet('att', data || []); return data || []; },
   activities: async () => { const c = cacheGet('act');   if (c) return c; const { data } = await sb.from('activities').select('*').order('fecha', { ascending: false }); cacheSet('act', data || []); return data || []; },
-  feriados:   async () => { const c = cacheGet('fer');   if (c) return c; const { data } = await sb.from('feriados').select('*').order('fecha');                          cacheSet('fer', data || []); return data || []; },
+  feriados: async () => {
+    const c = cacheGet('fer', 300000); // caché de 5 minutos para feriados
+    if (c) return c;
+    try {
+      const { data, error } = await sb.from('feriados').select('*').order('fecha');
+      if (error) throw error;
+      cacheSet('fer', data || []);
+      return data || [];
+    } catch(err) {
+      console.warn('Error cargando feriados:', err.message);
+      return _cache.fer?.val || []; // mantener caché anterior si falla
+    }
+  },
   informes:   async () => { const c = cacheGet('inf');   if (c) return c; const { data } = await sb.from('informes').select('*');                                         cacheSet('inf', data || []); return data || []; },
   permisos:   async () => { const c = cacheGet('pm');    if (c) return c; const { data } = await sb.from('permisos').select('*').order('created_at', { ascending: false }); cacheSet('pm', data || []); return data || []; },
   bonos:      async () => { const c = cacheGet('bon');   if (c) return c; const { data } = await sb.from('bonos').select('*');                                            cacheSet('bon', data || []); return data || []; },
@@ -1688,8 +1700,21 @@ const db = {
     }
   },
   deleteActivity: async (id) => { cacheClear('act'); await sb.from('activities').delete().eq('id', id); },
-  saveFeriadoRow: async (row) => { cacheClear('fer'); const { data, error } = await sb.from('feriados').insert({ fecha: row.fecha, descripcion: row.descripcion, creado_por: row.creadoPor }).select().single(); if (error) throw error; return data; },
-  deleteFeriado: async (id) => { cacheClear('fer'); await sb.from('feriados').delete().eq('id', id); },
+  saveFeriadoRow: async (row) => {
+    const { data, error } = await sb.from('feriados').insert({ fecha: row.fecha, descripcion: row.descripcion, creado_por: row.creadoPor }).select().single();
+    if (error) throw error;
+    // Actualizar caché inmediatamente con el nuevo registro
+    const ferActuales = _cache.fer?.val || [];
+    cacheSet('fer', [...ferActuales, mapFeriado(data)]);
+    return data;
+  },
+  deleteFeriado: async (id) => {
+    await sb.from('feriados').delete().eq('id', id);
+    cacheClear('fer');
+    await sb.from('feriados').select('*').order('fecha').then(({data}) => {
+      if (data) cacheSet('fer', data);
+    });
+  },
   saveInformeRow: async (row) => {
     cacheClear('inf');
     const payload = {
@@ -2026,6 +2051,8 @@ async function agregarFeriado(fecha, descripcion) {
   }
   try {
     await db.saveFeriadoRow({ fecha, descripcion: descripcion || 'Día feriado', creadoPor: getCurrentUser()?.nombre || 'Gestor' });
+    // Recargar feriados frescos desde Supabase
+    cacheClear('fer');
     await db.feriados();
     toast(`Feriado registrado: ${formatDateFull(fecha)}`, 'success');
 
@@ -2711,8 +2738,9 @@ function showApp() {
 function changeTab(tab) {
   currentTab = tab;
   renderApp();
-  // Refrescar datos en background sin bloquear la UI
-  cacheClearAll();
+  // Refrescar solo datos que cambian frecuentemente, en background
+  cacheClear('users', 'att', 'act', 'inf', 'pm', 'bon');
+  // NO limpiar 'fer' (feriados) — cambian muy poco y la recarga puede fallar
   Promise.all([
     db.users(), db.attendance(), db.activities(),
     db.informes(), db.permisos(), db.bonos(),
