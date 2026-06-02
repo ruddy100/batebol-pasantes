@@ -3787,9 +3787,17 @@ function renderAttendanceList(user) {
                   <td><span style="font-family: var(--mono);">${fmtTime(a.horaSalida)}</span></td>
                   <td><span style="font-family: var(--mono);">${h}h</span></td>
                   <td>
-                    ${a.estado === 'puntual'
-                      ? '<span class="badge-pill badge-success"><span class="dot"></span>Puntual</span>'
-                      : '<span class="badge-pill badge-warning"><span class="dot"></span>Tardanza</span>'}
+                    ${(() => {
+                      const efectivo = getEstadoEfectivo(a);
+                      const tienePermiso = efectivo !== a.estado; // permiso cambió el estado
+                      if (efectivo === 'puntual' && tienePermiso) {
+                        return '<span class="badge-pill badge-success"><span class="dot"></span>Puntual <span style="font-size:9px;opacity:.8;">✓ permiso</span></span>';
+                      } else if (efectivo === 'puntual') {
+                        return '<span class="badge-pill badge-success"><span class="dot"></span>Puntual</span>';
+                      } else {
+                        return '<span class="badge-pill badge-warning"><span class="dot"></span>Tardanza</span>';
+                      }
+                    })()}
                   </td>
                 </tr>
               `;
@@ -6553,6 +6561,9 @@ function renderBonos(user) {
   const pasantes = _db.users().filter(u => u.rol === 'pasante' && isUserActive(u));
 
   // Calcular bonos para todos
+  // Asegurar permisos cargados para cálculo correcto del bono
+  if (!_cache.pm?.val?.length) { db.permisos(); }
+
   const calculos = pasantes.map(p => {
     const calc = calcularBono(p.id, mes, anio);
     const pagado = _db.bonos().find(b => b.userId === p.id && b.mes === mes && b.anio === anio);
@@ -6787,8 +6798,11 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
   }[tipo] || '#fff');
 
   const rowLabel = (tipo) => ({
-    puntual: 'Asistió -- puntual', tardanza: 'Asistió -- tardanza',
-    falta: 'FALTA injustificada', feriado: 'Feriado', permiso: 'Permiso aprobado',
+    puntual:  'Asistió — puntual',
+    tardanza: 'Asistió — tardanza',
+    falta:    'FALTA injustificada',
+    feriado:  'Feriado',
+    permiso:  '✓ Permiso aprobado',
   }[tipo] || tipo);
 
   return `
