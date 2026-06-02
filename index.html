@@ -6600,7 +6600,7 @@ function renderBonos(user) {
   `;
 }
 
-function openDescargaBonoModal(userId, mes, anio, montCalc) {
+async function openDescargaBonoModal(userId, mes, anio, montCalc) {
   const u   = _db.users().find(x => x.id === userId);
   const calc = calcularBono(userId, mes, anio);
   const periodo = getPeriodo(mes, anio);
@@ -6992,15 +6992,17 @@ function printDescargo() {
    ============================================================ */
 function buildReportHTML(userId, mes, anio) {
   const user = _db.users().find(u => u.id === userId);
-  const att = _db.attendance().filter(a=>{
-    const f=new Date(a.fecha); return a.userId===userId&&f.getMonth()+1===mes&&f.getFullYear()===anio;
-  }).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const acts = _db.activities().filter(a=>{
-    const f=new Date(a.fecha); return a.userId===userId&&f.getMonth()+1===mes&&f.getFullYear()===anio;
-  }).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const permisosMes = _db.permisos().filter(p=>{
-    return p.userId===userId && p.estado==='aprobado' && p.fecha>=`${anio}-${pad(mes)}-01` && p.fecha<=`${anio}-${pad(mes)}-31`;
-  });
+  // Filtrar por prefijo de fecha string (YYYY-MM) — más confiable que parsear Date
+  const mesStr = `${anio}-${pad(mes)}`;
+  const att = _db.attendance().filter(a =>
+    a.userId === userId && a.fecha && a.fecha.startsWith(mesStr)
+  ).sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const acts = _db.activities().filter(a =>
+    a.userId === userId && a.fecha && a.fecha.startsWith(mesStr)
+  ).sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const permisosMes = _db.permisos().filter(p =>
+    p.userId === userId && p.estado === 'aprobado' && p.fecha && p.fecha.startsWith(mesStr)
+  );
   const puntuales=att.filter(a=>a.estado==='puntual').length;
   const tardanzas=att.filter(a=>a.estado==='tardanza').length;
   const horas=att.reduce((s,a)=>{
@@ -7130,7 +7132,11 @@ function buildReportHTML(userId, mes, anio) {
 }
 
 
-function previewReport(userId, mes, anio) {
+async function previewReport(userId, mes, anio) {
+  // Asegurar datos frescos desde Supabase antes de generar el informe
+  cacheClear('att', 'act', 'pm', 'inf');
+  await Promise.all([db.attendance(), db.activities(), db.permisos(), db.informes()]);
+
   openModal(`
     <div class="modal-header">
       <div class="modal-title"><i class="fas fa-file-pdf" style="color:var(--accent);margin-right:8px;"></i>Vista previa del informe</div>
