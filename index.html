@@ -5566,20 +5566,8 @@ function getInforme(userId, mes, anio) {
 function getOrCreateInforme(userId, mes, anio) {
   const existing = getInforme(userId, mes, anio);
   if (existing) return existing;
-  const inf = {
-    id: 'inf' + Date.now(),
-    userId, mes, anio,
-    estado: 'borrador',     // borrador | enviado | aprobado | rechazado
-    enviadoEn: null,
-    aprobadoEn: null,
-    aprobadoPor: null,
-    comentarioEncargado: '',
-    firma: simpleHash(`${userId}-${mes}-${anio}`),
-  };
-  const arr = _db.informes();
-  arr.push(inf);
-  db.saveInformes(arr);
-  return inf;
+  // En modo Supabase solo retorna null si no existe — se crea via submitInforme
+  return null;
 }
 
 async function submitInforme(userId, mes, anio, reflexion) {
@@ -5754,12 +5742,14 @@ async function responderPermiso(permisoId, estado) {
 
   // Corregir tardanza si aplica
   if (estado === 'aprobado' && p.cubreEntrada) {
-    const attArr = _db.attendance();
-    const reg = attArr.find(a => a.userId === p.userId && a.fecha === p.fecha);
+    const reg = _db.attendance().find(a => a.userId === p.userId && a.fecha === p.fecha);
     if (reg && reg.estado === 'tardanza') {
-      reg.estado = 'puntual';
-      reg.permisoCubre = p.id;
-      db.saveAttendance(attArr);
+      try {
+        await db.saveAttendanceRow({ ...reg, estado: 'puntual', permisoCubre: p.id });
+        await db.attendance(); // refrescar caché
+      } catch(e) {
+        console.warn('No se pudo actualizar tardanza:', e.message);
+      }
     }
   }
 
