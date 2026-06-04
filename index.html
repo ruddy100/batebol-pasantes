@@ -7136,7 +7136,9 @@ function buildReportHTML(userId, mes, anio) {
     </table>
 
     <h3 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#333;border-bottom:2px solid #333;padding-bottom:4px;margin:20px 0 10px;">Registro de asistencias</h3>
-    ${att.length===0?'<p style="font-size:13px;color:#666;">Sin registros de asistencia en este período.</p>':`
+    ${att.length===0 && permisosMes.filter(p=>p.tipo==='dia_completo').length===0
+      ? '<p style="font-size:13px;color:#666;">Sin registros de asistencia en este período.</p>'
+      : `
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
       <thead>
         <tr style="background:#343a40;color:#fff;">
@@ -7145,21 +7147,76 @@ function buildReportHTML(userId, mes, anio) {
           <th style="padding:7px 10px;text-align:center;font-weight:700;">Entrada</th>
           <th style="padding:7px 10px;text-align:center;font-weight:700;">Salida</th>
           <th style="padding:7px 10px;text-align:center;font-weight:700;">Estado</th>
+          <th style="padding:7px 10px;text-align:left;font-weight:700;">Permiso / Observación</th>
         </tr>
       </thead>
       <tbody>
-        ${att.map((a,i)=>{
-          const dia=new Date(a.fecha+'T12:00').toLocaleDateString('es-BO',{weekday:'long'});
-          return `<tr style="background:${i%2===0?'#fff':'#f8f9fa'};">
-            <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;color:#333;">${a.fecha}</td>
-            <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-transform:capitalize;color:#333;">${dia}</td>
-            <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaEntrada)}</td>
-            <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaSalida)}</td>
-            <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;">
-              <span style="background:${getEstadoEfectivo(a)==='puntual'?'#d4edda':'#fff3cd'};color:${getEstadoEfectivo(a)==='puntual'?'#155724':'#856404'};padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;">${getEstadoEfectivo(a)}</span>
-            </td>
-          </tr>`;
-        }).join('')}
+        ${(() => {
+          // Combinar asistencias + días de permiso completo sin asistencia
+          const fechasAtt = new Set(att.map(a => a.fecha));
+          const permisosCompletos = permisosMes.filter(p =>
+            p.tipo === 'dia_completo' && !fechasAtt.has(p.fecha)
+          );
+          // Crear filas de permisos día completo sin asistencia
+          const filasPermiso = permisosCompletos.map(p => ({
+            _esPermisoDia: true,
+            fecha: p.fecha,
+            motivo: p.motivo,
+          }));
+          // Unir y ordenar por fecha
+          const todasFilas = [...att, ...filasPermiso].sort((a,b) => a.fecha.localeCompare(b.fecha));
+
+          return todasFilas.map((a, i) => {
+            const dia = new Date(a.fecha+'T12:00').toLocaleDateString('es-BO',{weekday:'long'});
+            const bg = i%2===0?'#fff':'#f8f9fa';
+
+            // Fila de permiso día completo sin asistencia
+            if (a._esPermisoDia) {
+              return `<tr style="background:#cce5ff;">
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;color:#333;">${a.fecha}</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-transform:capitalize;color:#333;">${dia}</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;color:#666;">—</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;color:#666;">—</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;">
+                  <span style="background:#cce5ff;color:#004085;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;">PERMISO</span>
+                </td>
+                <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;color:#004085;font-style:italic;">
+                  Día completo — ${escapeHtml(a.motivo)}
+                </td>
+              </tr>`;
+            }
+
+            // Fila de asistencia normal — buscar si tiene permiso ese día
+            const permDia = permisosMes.filter(p => p.fecha === a.fecha);
+            const estadoEfectivo = getEstadoEfectivo(a);
+            const tienePermisoCubreEntrada = permDia.some(p => p.cubreEntrada);
+
+            let permObs = '';
+            if (permDia.length > 0) {
+              permObs = permDia.map(p => {
+                if (p.tipo === 'dia_completo') return `Permiso día completo — ${escapeHtml(p.motivo)}`;
+                if (p.tipo === 'medio_dia') return `Permiso medio día (${p.turno === 'manana' ? 'mañana' : 'tarde'}) — ${escapeHtml(p.motivo)}`;
+                if (p.tipo === 'horas') return `Permiso ${p.horaInicio}–${p.horaFin} — ${escapeHtml(p.motivo)}`;
+                return escapeHtml(p.motivo);
+              }).join('; ');
+            }
+
+            return `<tr style="background:${permDia.length > 0 ? '#e8f4fd' : bg};">
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;color:#333;">${a.fecha}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-transform:capitalize;color:#333;">${dia}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaEntrada)}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;font-weight:600;color:#111;">${fmtTime(a.horaSalida)}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;text-align:center;">
+                <span style="background:${estadoEfectivo==='puntual'?'#d4edda':'#fff3cd'};color:${estadoEfectivo==='puntual'?'#155724':'#856404'};padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;">
+                  ${estadoEfectivo}${tienePermisoCubreEntrada ? ' ✓' : ''}
+                </span>
+              </td>
+              <td style="padding:6px 10px;border-bottom:1px solid #dee2e6;font-size:12px;color:#004085;font-style:italic;">
+                ${permObs || '—'}
+              </td>
+            </tr>`;
+          }).join('');
+        })()}
       </tbody>
     </table>`}
 
