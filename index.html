@@ -3460,7 +3460,7 @@ function renderEncargado(user) {
 }
 
 function renderEncargadoHome(user) {
-  const pasantes = _db.users().filter(u => u.rol === 'pasante' && u.area === user.area);
+  const pasantes = _db.users().filter(u => u.rol === 'pasante' && u.area === user.area && isUserActive(u));
   const ids = pasantes.map(p => p.id);
   const att = _db.attendance().filter(a => ids.includes(a.userId));
   const acts = _db.activities().filter(a => ids.includes(a.userId));
@@ -4081,10 +4081,12 @@ function renderGestorHome(user) {
   const hoy = fechaHoyISO();
   const ahora = new Date();
   const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
-  const attMes = att.filter(a => a.fecha >= inicioMes);
+  const pasantesActivos = pasantes.filter(p => isUserActive(p));
+  const idsPasantes = new Set(pasantesActivos.map(p => p.id));
+  const attMes = att.filter(a => idsPasantes.has(a.userId) && a.fecha >= inicioMes);
   const { puntuales } = contarEstados(attMes);
-  const tardanzasHoy = att.filter(a => a.fecha === hoy && getEstadoEfectivo(a) === 'tardanza').length;
-  const presentesHoy = att.filter(a => a.fecha === hoy && a.horaEntrada).length;
+  const tardanzasHoy = att.filter(a => idsPasantes.has(a.userId) && a.fecha === hoy && getEstadoEfectivo(a) === 'tardanza').length;
+  const presentesHoy = att.filter(a => idsPasantes.has(a.userId) && a.fecha === hoy && a.horaEntrada).length;
   const actsMes = acts.filter(a => a.fecha >= inicioMes);
   const areas = [...new Set(pasantes.map(p => p.area))];
   const punt = attMes.length > 0 ? Math.round(puntuales / attMes.length * 100) : 0;
@@ -4109,14 +4111,14 @@ function renderGestorHome(user) {
       <div class="kpi-card">
         <div class="kpi-icon"><i class="fas fa-users"></i></div>
         <div class="kpi-label">Pasantes activos</div>
-        <div class="kpi-value">${pasantes.length}</div>
+        <div class="kpi-value">${pasantesActivos.length}</div>
         <div class="kpi-trend up"><i class="fas fa-arrow-up"></i> En ${areas.length} áreas</div>
       </div>
       <div class="kpi-card success">
         <div class="kpi-icon"><i class="fas fa-user-check"></i></div>
         <div class="kpi-label">Presentes hoy</div>
-        <div class="kpi-value">${presentesHoy}<span class="unit">/${pasantes.length}</span></div>
-        <div class="kpi-trend up"><i class="fas fa-arrow-up"></i> ${pasantes.length > 0 ? Math.round(presentesHoy / pasantes.length * 100) : 0}% asistencia</div>
+        <div class="kpi-value">${presentesHoy}<span class="unit">/${pasantesActivos.length}</span></div>
+        <div class="kpi-trend up"><i class="fas fa-arrow-up"></i> ${pasantesActivos.length > 0 ? Math.round(presentesHoy / pasantesActivos.length * 100) : 0}% asistencia</div>
       </div>
       <div class="kpi-card warning">
         <div class="kpi-icon"><i class="fas fa-triangle-exclamation"></i></div>
