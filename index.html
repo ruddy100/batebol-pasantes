@@ -2764,18 +2764,21 @@ async function showApp() {
   document.getElementById('appContainer').classList.remove('hidden');
 
   const alertas = checkVigencias();
-
-  // Para pasantes: cargar asistencia ANTES del primer render para evitar estado incorrecto
   const user = getCurrentUser();
+
   if (user?.rol === 'pasante') {
+    // Consultar directamente Supabase sin caché para obtener asistencia real de hoy
     cacheClear('att');
-    await db.attendance().catch(() => {});
+    const { data: attData } = await sb.from('attendance')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('fecha', { ascending: false });
+    if (attData) cacheSet('att', attData);
   }
 
   renderApp();
   refreshNotifBadge();
 
-  // Forzar recarga de attendance también para otros roles
   if (user?.rol !== 'pasante') {
     cacheClear('att');
     db.attendance().then(() => renderApp()).catch(() => {});
@@ -2876,10 +2879,10 @@ function renderPasante(user) {
 }
 
 function renderPasanteHome(user) {
-  // Siempre recargar asistencia fresca para el punch card
+  // Siempre recargar asistencia fresca desde Supabase cada vez que se abre el home
   const attCacheAge = Date.now() - (_cache.att?.ts || 0);
   if (attCacheAge > 5000) {
-    // Mostrar estado de carga en el punch card mientras llegan los datos
+    cacheClear('att');
     db.attendance().then(() => renderApp()).catch(() => {});
   }
   const sched = getUserSchedule(user);
