@@ -5489,17 +5489,17 @@ function openReportPicker(userId) {
    HELPERS DE PERÍODO (25-&gt;25)
    ============================================================ */
 /**
- * Devuelve {desde, hasta} del período de planilla que va del 26 del mes anterior
- * al 25 del mes indicado (o actual si no se pasa). Ambas fechas ISO YYYY-MM-DD.
+ * Devuelve {desde, hasta} del período de planilla que va del 21 del mes anterior
+ * al 20 del mes indicado (o actual si no se pasa). Ambas fechas ISO YYYY-MM-DD.
  */
 function getPeriodo(mes, anio) {
-  // Período: del 26 del mes anterior al 25 del mes actual
-  const hasta = new Date(anio, mes - 1, 25);
-  const desde = new Date(anio, mes - 2, 26);
+  // Período: del 21 del mes anterior al 20 del mes actual
+  const hasta = new Date(anio, mes - 1, 20);
+  const desde = new Date(anio, mes - 2, 21);
   return {
     desde: desde.toISOString().slice(0, 10),
     hasta: hasta.toISOString().slice(0, 10),
-    label: `26/${pad(mes === 1 ? 12 : mes - 1)} - 25/${pad(mes)}/${anio}`,
+    label: `21/${pad(mes === 1 ? 12 : mes - 1)} – 20/${pad(mes)}/${anio}`,
     mes, anio,
   };
 }
@@ -5524,7 +5524,7 @@ function calcularDiasHabiles(userId, desde, hasta) {
     const diaSem = d.getDay();
     if (!(sched.diasLaborables || [1,2,3,4,5]).includes(diaSem)) { fines++; }
     else if (ferSet.has(iso)) { feriadosCnt++; }
-    else if (permisosAprobados.has(iso)) { permisosCnt++; habiles++; } // permiso = día hábil sin falta
+    else if (permisosAprobados.has(iso)) { permisosCnt++; habiles++; }
     else { habiles++; }
     d.setDate(d.getDate() + 1);
   }
@@ -5533,9 +5533,11 @@ function calcularDiasHabiles(userId, desde, hasta) {
 
 /**
  * Cuenta las faltas injustificadas en el período: días hábiles sin check-in y sin permiso.
+ * Respeta la fecha de inicio de la pasantía.
  */
 function calcularFaltas(userId, desde, hasta) {
   const user = _db.users().find(u => u.id === userId);
+  if (!user) return 0;
   const sched = getUserSchedule(user);
   const ferSet = new Set(_db.feriados().map(f => f.fecha));
   const permisosAprobados = new Set(
@@ -5550,8 +5552,13 @@ function calcularFaltas(userId, desde, hasta) {
   while (d <= fin) {
     const iso = d.toISOString().slice(0, 10);
     const diaSem = d.getDay();
-    if ((sched.diasLaborables || [1,2,3,4,5]).includes(diaSem) && !ferSet.has(iso) && !permisosAprobados.has(iso)) {
-      if (!attSet.has(iso)) faltas++;
+    if (
+      (sched.diasLaborables || [1,2,3,4,5]).includes(diaSem) &&
+      !ferSet.has(iso) &&
+      !permisosAprobados.has(iso) &&
+      !attSet.has(iso)
+    ) {
+      faltas++;
     }
     d.setDate(d.getDate() + 1);
   }
@@ -6569,7 +6576,7 @@ function renderBonos(user) {
     <div class="page-header">
       <div>
         <h1 class="page-title">Gestión de bonos</h1>
-        <p class="page-subtitle">Período: ${periodo.label} · Cierre el 25 de cada mes</p>
+        <p class="page-subtitle">Período: ${periodo.label} · Cierre el 20 de cada mes</p>
       </div>
       <div class="page-actions">
         <select class="filter-input" onchange="window._bonosMes=this.value.split('-')[0]; window._bonosAnio=this.value.split('-')[1]; renderApp();" style="padding:8px 12px;">
