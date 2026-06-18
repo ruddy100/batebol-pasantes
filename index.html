@@ -1983,7 +1983,10 @@ async function initApp() {
 /* ============================================================
    ASISTENCIA -- Lógica
    ============================================================ */
-function fechaHoyISO() { return new Date().toISOString().slice(0, 10); }
+function fechaHoyISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtTime(iso) { if (!iso) return '--'; const d = new Date(iso); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
 function fmtDate(iso) {
@@ -2764,21 +2767,18 @@ async function showApp() {
   document.getElementById('appContainer').classList.remove('hidden');
 
   const alertas = checkVigencias();
-  const user = getCurrentUser();
 
+  // Para pasantes: cargar asistencia ANTES del primer render para evitar estado incorrecto
+  const user = getCurrentUser();
   if (user?.rol === 'pasante') {
-    // Consultar directamente Supabase sin caché para obtener asistencia real de hoy
     cacheClear('att');
-    const { data: attData } = await sb.from('attendance')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('fecha', { ascending: false });
-    if (attData) cacheSet('att', attData);
+    await db.attendance().catch(() => {});
   }
 
   renderApp();
   refreshNotifBadge();
 
+  // Forzar recarga de attendance también para otros roles
   if (user?.rol !== 'pasante') {
     cacheClear('att');
     db.attendance().then(() => renderApp()).catch(() => {});
@@ -2879,10 +2879,10 @@ function renderPasante(user) {
 }
 
 function renderPasanteHome(user) {
-  // Siempre recargar asistencia fresca desde Supabase cada vez que se abre el home
+  // Siempre recargar asistencia fresca para el punch card
   const attCacheAge = Date.now() - (_cache.att?.ts || 0);
   if (attCacheAge > 5000) {
-    cacheClear('att');
+    // Mostrar estado de carga en el punch card mientras llegan los datos
     db.attendance().then(() => renderApp()).catch(() => {});
   }
   const sched = getUserSchedule(user);
