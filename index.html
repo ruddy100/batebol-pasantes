@@ -2767,9 +2767,13 @@ function showApp() {
   renderApp();
   refreshNotifBadge();
 
+  // Forzar recarga inmediata de asistencia para mostrar estado correcto del punch card
+  cacheClear('att');
+  db.attendance().then(() => renderApp()).catch(() => {});
+
   const user = getCurrentUser();
   if (user?.rol === 'gestor' && alertas.length > 0) {
-    setTimeout(() => showVigenciaAlertas(alertas), 400);
+    setTimeout(() => showVigenciaAlertas(alertas), 600);
   }
 }
 
@@ -2863,6 +2867,11 @@ function renderPasante(user) {
 }
 
 function renderPasanteHome(user) {
+  // Recargar asistencia en background para mantener el punch card actualizado
+  const attCacheAge = Date.now() - (_cache.att?.ts || 0);
+  if (attCacheAge > 10000) { // si la caché tiene más de 10 segundos
+    db.attendance().then(() => renderApp()).catch(() => {});
+  }
   const sched = getUserSchedule(user);
 
   // Si la cuenta fue desactivada, bloquear con aviso
@@ -5494,12 +5503,16 @@ function openReportPicker(userId) {
  */
 function getPeriodo(mes, anio) {
   // Período: del 21 del mes anterior al 20 del mes actual
-  const hasta = new Date(anio, mes - 1, 20);
-  const desde = new Date(anio, mes - 2, 21);
+  // Usamos formato ISO directo para evitar problemas de zona horaria
+  const mesActual  = pad(mes);
+  const mesAnterior = mes === 1 ? 12 : mes - 1;
+  const anioAnterior = mes === 1 ? anio - 1 : anio;
+  const desde = `${anioAnterior}-${pad(mesAnterior)}-21`;
+  const hasta  = `${anio}-${mesActual}-20`;
   return {
-    desde: desde.toISOString().slice(0, 10),
-    hasta: hasta.toISOString().slice(0, 10),
-    label: `21/${pad(mes === 1 ? 12 : mes - 1)} – 20/${pad(mes)}/${anio}`,
+    desde,
+    hasta,
+    label: `21/${pad(mesAnterior)} – 20/${mesActual}/${anio}`,
     mes, anio,
   };
 }
