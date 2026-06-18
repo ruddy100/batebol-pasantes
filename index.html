@@ -2759,19 +2759,28 @@ const TABS = {
   ],
 };
 
-function showApp() {
+async function showApp() {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('appContainer').classList.remove('hidden');
 
   const alertas = checkVigencias();
+
+  // Para pasantes: cargar asistencia ANTES del primer render para evitar estado incorrecto
+  const user = getCurrentUser();
+  if (user?.rol === 'pasante') {
+    cacheClear('att');
+    await db.attendance().catch(() => {});
+  }
+
   renderApp();
   refreshNotifBadge();
 
-  // Forzar recarga inmediata de asistencia para mostrar estado correcto del punch card
-  cacheClear('att');
-  db.attendance().then(() => renderApp()).catch(() => {});
+  // Forzar recarga de attendance también para otros roles
+  if (user?.rol !== 'pasante') {
+    cacheClear('att');
+    db.attendance().then(() => renderApp()).catch(() => {});
+  }
 
-  const user = getCurrentUser();
   if (user?.rol === 'gestor' && alertas.length > 0) {
     setTimeout(() => showVigenciaAlertas(alertas), 600);
   }
@@ -2867,9 +2876,10 @@ function renderPasante(user) {
 }
 
 function renderPasanteHome(user) {
-  // Recargar asistencia en background para mantener el punch card actualizado
+  // Siempre recargar asistencia fresca para el punch card
   const attCacheAge = Date.now() - (_cache.att?.ts || 0);
-  if (attCacheAge > 10000) { // si la caché tiene más de 10 segundos
+  if (attCacheAge > 5000) {
+    // Mostrar estado de carga en el punch card mientras llegan los datos
     db.attendance().then(() => renderApp()).catch(() => {});
   }
   const sched = getUserSchedule(user);
