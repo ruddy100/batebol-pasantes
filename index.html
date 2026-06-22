@@ -2772,7 +2772,9 @@ async function showApp() {
   const user = getCurrentUser();
   if (user?.rol === 'pasante') {
     cacheClear('att');
-    await db.attendance().catch(() => {});
+    const { data: attData } = await sb.from('attendance')
+      .select('*').eq('user_id', user.id).order('fecha', { ascending: false });
+    if (attData) cacheSet('att', attData);
   }
 
   renderApp();
@@ -2784,8 +2786,130 @@ async function showApp() {
     db.attendance().then(() => renderApp()).catch(() => {});
   }
 
-  if (user?.rol === 'gestor' && alertas.length > 0) {
+  if (user?.rol === 'gestor' && alertas.length > 0 && !(new Date().getDate() >= 21 && new Date().getDate() <= 28)) {
+    // Solo mostrar vigencias solas si NO estamos en período de cierre (en cierre van combinadas)
     setTimeout(() => showVigenciaAlertas(alertas), 600);
+  }
+
+  // Alertas de cierre de período (incluye vigencias si las hay)
+  const delayCierre = 800;
+  setTimeout(() => checkAlertasCierre(user, alertas), delayCierre);
+}
+
+function checkAlertasCierre(user, alertasVigencia = []) {
+  if (!user) return;
+  const hoy = new Date();
+  const dia = hoy.getDate();
+  if (dia < 21 || dia > 28) return;
+
+  // El informe corresponde al mes del cierre (período 21/05–20/06 = informe Junio)
+  const mes = hoy.getMonth() + 1;
+  const anio = hoy.getFullYear();
+  const mesInforme = mes;
+  const anioInforme = anio;
+  const nombreMesInforme = MESES_NOMBRE[mesInforme];
+
+  // Solo mostrar una vez por día por usuario
+  const claveHoy = `alerta_cierre_${fechaHoyISO()}_${user.id}`;
+  if (sessionStorage.getItem(claveHoy)) return;
+  sessionStorage.setItem(claveHoy, '1');
+
+  if (user.rol === 'pasante') {
+    const informe = getInforme(user.id, mesInforme, anioInforme);
+    const pendiente = !informe || informe.estado === 'borrador' || informe.estado === 'rechazado';
+    if (!pendiente) return;
+    const attMes = _db.attendance().filter(a => a.userId === user.id && a.fecha >= `${anioInforme}-${pad(mesInforme)}-01` && a.fecha <= `${anioInforme}-${pad(mesInforme)}-31`);
+    const actsMes = _db.activities().filter(a => a.userId === user.id && a.fecha >= `${anioInforme}-${pad(mesInforme)}-01` && a.fecha <= `${anioInforme}-${pad(mesInforme)}-31`);
+    openModal(`
+      <div class="modal-header">
+        <div class="modal-title" style="color:var(--warning);">
+          <i class="fas fa-triangle-exclamation" style="margin-right:8px;"></i>
+          Recuerda enviar tu informe mensual
+        </div>
+        <button class="modal-close" onclick="closeModal()"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div style="background:var(--warning-dim);border:1px solid rgba(240,180,41,.4);border-radius:var(--radius);padding:16px 18px;margin-bottom:16px;">
+          <div style="font-weight:700;font-size:15px;margin-bottom:6px;">
+            Ya pasó el día 20 — envía tu informe de ${nombreMesInforme} ${anioInforme}
+          </div>
+          <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+            Para recibir tu bono necesitas enviar tu informe y que sea aprobado por tu encargado.
+            ${informe?.estado === 'rechazado' ? '<br><strong style="color:var(--danger);">Tu informe fue devuelto. Corrígelo y reenvíalo.</strong>' : ''}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:center;">
+          <div style="background:var(--bg-elevated);border-radius:var(--radius-sm);padding:14px;">
+            <div style="font-size:22px;font-weight:700;">${attMes.length}</div>
+            <div style="font-size:11px;color:var(--text-muted);font-family:var(--mono);">DÍAS ASISTIDOS</div>
+          </div>
+          <div style="background:var(--bg-elevated);border-radius:var(--radius-sm);padding:14px;">
+            <div style="font-size:22px;font-weight:700;">${actsMes.length}</div>
+            <div style="font-size:11px;color:var(--text-muted);font-family:var(--mono);">ACTIVIDADES</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Recordar más tarde</button>
+        <button class="btn btn-primary" onclick="closeModal(); changeTab('reports');">
+          <i class="fas fa-paper-plane"></i> Ir a enviar informe
+        </button>
+      </div>
+    `);
+  }
+
+  if (user.rol === 'gestor') {
+    const informesPendientes = _db.informes().filter(i =>
+      i.mes === mesInforme && i.anio === anioInforme && i.estado === 'enviado'
+    );
+    const pasantes = _db.users().filter(u => u.rol === 'pasante' && isUserActive(u));
+    const bonosPendientes = pasantes.filter(p => {
+      const inf = getInforme(p.id, mesInforme, anioInforme);
+      const bono = _db.bonos().find(b => b.userId === p.id && b.mes === mesInforme && b.anio === anioInforme);
+      return inf?.estado === 'aprobado' && !bono;
+    });
+    if (informesPendientes.length === 0 && bonosPendientes.length === 0 && alertasVigencia.length === 0) return;
+    openModal(`
+      <div class="modal-header">
+        <div class="modal-title" style="color:var(--warning);">
+          <i class="fas fa-bell" style="margin-right:8px;"></i>
+          Pendientes — cierre ${nombreMesInforme} ${anioInforme}
+        </div>
+        <button class="modal-close" onclick="closeModal()"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        ${alertasVigencia.length > 0 ? `
+          <div style="background:var(--danger-dim);border:1px solid rgba(248,81,73,.4);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;">
+            <i class="fas fa-hourglass-end" style="color:var(--danger);font-size:20px;flex-shrink:0;"></i>
+            <div>
+              <div style="font-weight:700;">${alertasVigencia.length} pasantía${alertasVigencia.length>1?'s':''} próxima${alertasVigencia.length>1?'s':''} a vencer</div>
+              <div style="font-size:12px;color:var(--text-secondary);">${alertasVigencia.map(a => `${a.user.nombre} — ${a.dias === 0 ? 'vence hoy' : `${a.dias} día${a.dias>1?'s':''}`}`).join(', ')}</div>
+            </div>
+          </div>` : ''}
+        ${informesPendientes.length > 0 ? `
+          <div style="background:var(--warning-dim);border:1px solid rgba(240,180,41,.4);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;">
+            <i class="fas fa-file-circle-check" style="color:var(--warning);font-size:20px;flex-shrink:0;"></i>
+            <div>
+              <div style="font-weight:700;">${informesPendientes.length} informe${informesPendientes.length>1?'s':''} pendiente${informesPendientes.length>1?'s':''} de aprobación</div>
+              <div style="font-size:12px;color:var(--text-secondary);">Los encargados deben revisar y aprobar los informes de sus pasantes.</div>
+            </div>
+          </div>` : ''}
+        ${bonosPendientes.length > 0 ? `
+          <div style="background:var(--success-dim);border:1px solid rgba(63,185,80,.4);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;">
+            <i class="fas fa-coins" style="color:var(--success);font-size:20px;flex-shrink:0;"></i>
+            <div>
+              <div style="font-weight:700;">${bonosPendientes.length} bono${bonosPendientes.length>1?'s':''} listo${bonosPendientes.length>1?'s':''} para pagar</div>
+              <div style="font-size:12px;color:var(--text-secondary);">Informe aprobado — genera el descargo y registra el pago.</div>
+            </div>
+          </div>` : ''}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+        ${alertasVigencia.length > 0 ? `<button class="btn btn-secondary" onclick="closeModal(); changeTab('accounts');"><i class="fas fa-user-shield"></i> Ver cuentas</button>` : ''}
+        ${informesPendientes.length > 0 ? `<button class="btn btn-secondary" onclick="closeModal(); changeTab('informes_gestor');"><i class="fas fa-file-circle-check"></i> Ver informes</button>` : ''}
+        ${bonosPendientes.length > 0 ? `<button class="btn btn-primary" onclick="closeModal(); changeTab('bonos');"><i class="fas fa-coins"></i> Ir a bonos</button>` : ''}
+      </div>
+    `);
   }
 }
 
@@ -6576,12 +6700,18 @@ function renderInformesGestor(user) {
 function renderBonos(user) {
   const ahora = new Date();
   const meses = [];
+  // Agregar el mes siguiente (período en curso si ya pasó el día 20)
+  const dNext = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 1);
+  meses.push({ mes: dNext.getMonth() + 1, anio: dNext.getFullYear() });
+  // Mes actual y 4 anteriores
   for (let i = 0; i < 4; i++) {
     const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
     meses.push({ mes: d.getMonth() + 1, anio: d.getFullYear() });
   }
-  const mes = parseInt(window._bonosMes ?? meses[0].mes);
-  const anio = parseInt(window._bonosAnio ?? meses[0].anio);
+  // Si ya pasó el día 20, el período activo es el del mes siguiente
+  const defaultMes = ahora.getDate() > 20 ? meses[0] : meses[1];
+  const mes = parseInt(window._bonosMes ?? defaultMes.mes);
+  const anio = parseInt(window._bonosAnio ?? defaultMes.anio);
   const periodo = getPeriodo(mes, anio);
   const pasantes = _db.users().filter(u => u.rol === 'pasante' && isUserActive(u));
 
