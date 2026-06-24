@@ -6847,6 +6847,9 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
     const iso = d.toISOString().slice(0, 10);
     const diaSem = d.getDay();
     if ((sched.diasLaborables || [1,2,3,4,5]).includes(diaSem)) {
+      // Días fuera del período contractual (antes del inicio o después del fin)
+      const fueraContrato = (user.fechaInicio && iso < user.fechaInicio) ||
+                            (user.fechaFin && iso > user.fechaFin);
       if (ferSet.has(iso)) {
         diasDetalle.push({ iso, tipo: 'feriado' });
       } else if (permisosAprobados.has(iso)) {
@@ -6854,6 +6857,9 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
       } else if (attSet.has(iso)) {
         const reg = att.find(a => a.fecha === iso);
         diasDetalle.push({ iso, tipo: reg.estado === 'puntual' ? 'puntual' : 'tardanza' });
+      } else if (fueraContrato) {
+        // Día sin asistencia fuera del período contractual - sigue descontando del bono
+        diasDetalle.push({ iso, tipo: 'sin_contrato' });
       } else {
         diasDetalle.push({ iso, tipo: 'falta' });
       }
@@ -6863,7 +6869,8 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
 
   const diasHabiles  = diasDetalle.filter(d => d.tipo !== 'feriado').length;
   const diasTrabajados = diasDetalle.filter(d => ['puntual','tardanza','permiso'].includes(d.tipo)).length;
-  const faltas       = diasDetalle.filter(d => d.tipo === 'falta').length;
+  // Tanto faltas como sin_contrato descuentan del bono
+  const faltas       = diasDetalle.filter(d => d.tipo === 'falta' || d.tipo === 'sin_contrato').length;
   const valorDia     = diasHabiles > 0 ? (user.montoBono || 0) / diasHabiles : 0;
   const descuento    = faltas * valorDia;
   const montoBase    = user.montoBono || 0;
@@ -6871,14 +6878,16 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
   const rowColor = (tipo) => ({
     puntual: '#d4edda', tardanza: '#fff3cd',
     falta: '#f8d7da', feriado: '#e2e3e5', permiso: '#cce5ff',
+    sin_contrato: '#e9ecef',
   }[tipo] || '#fff');
 
   const rowLabel = (tipo) => ({
-    puntual:  'Asistió — puntual',
-    tardanza: 'Asistió — tardanza',
-    falta:    'FALTA injustificada',
-    feriado:  'Feriado',
-    permiso:  '✓ Permiso aprobado',
+    puntual:      'Asistió — puntual',
+    tardanza:     'Asistió — tardanza',
+    falta:        'FALTA injustificada',
+    feriado:      'Feriado',
+    permiso:      '✓ Permiso aprobado',
+    sin_contrato: 'Fuera de período contractual',
   }[tipo] || tipo);
 
   return `
@@ -6969,7 +6978,8 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
       <tbody>
         ${diasDetalle.map((dia, i) => {
           const reg = att.find(a => a.fecha === dia.iso);
-          const esFalta = dia.tipo === 'falta';
+          const descuentaDia = dia.tipo === 'falta' || dia.tipo === 'sin_contrato';
+          const esSinContrato = dia.tipo === 'sin_contrato';
           const bg = rowColor(dia.tipo);
           const diaSemNom = new Date(dia.iso+'T12:00').toLocaleDateString('es-BO',{weekday:'short'});
           return `<tr style="background:${bg};">
@@ -6977,9 +6987,9 @@ function buildDescargoHTML(userId, mes, anio, montoFinal, notasAjuste) {
             <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;color:#333;text-transform:capitalize;">${diaSemNom}</td>
             <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:center;color:#333;">${reg?.horaEntrada ? fmtTime(reg.horaEntrada) : '--'}</td>
             <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:center;color:#333;">${reg?.horaSalida ? fmtTime(reg.horaSalida) : '--'}</td>
-            <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:center;font-weight:700;font-size:10px;color:${esFalta?'#721c24':'#333'};">${rowLabel(dia.tipo)}</td>
+            <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:center;font-weight:700;font-size:10px;color:${dia.tipo==='falta'?'#721c24':(esSinContrato?'#495057':'#333')};font-style:${esSinContrato?'italic':'normal'};">${rowLabel(dia.tipo)}</td>
             <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:right;color:#333;">${dia.tipo==='feriado' ? '--' : 'Bs.'+valorDia.toFixed(2)}</td>
-            <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:right;font-weight:${esFalta?'700':'400'};color:${esFalta?'#721c24':'#333'};">${esFalta?'-Bs.'+valorDia.toFixed(2):'--'}</td>
+            <td style="padding:5px 8px;border-bottom:1px solid #dee2e6;text-align:right;font-weight:${descuentaDia?'700':'400'};color:${descuentaDia?'#721c24':'#333'};">${descuentaDia?'-Bs.'+valorDia.toFixed(2):'--'}</td>
           </tr>`;
         }).join('')}
         <tr style="background:#f8f9fa;font-weight:700;">
