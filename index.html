@@ -6621,12 +6621,18 @@ function renderInformesGestor(user) {
 function renderBonos(user) {
   const ahora = new Date();
   const meses = [];
+  // Mes siguiente primero (período activo si ya pasó el día 20)
+  const dNext = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 1);
+  meses.push({ mes: dNext.getMonth() + 1, anio: dNext.getFullYear() });
+  // Mes actual y 4 anteriores
   for (let i = 0; i < 4; i++) {
     const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
     meses.push({ mes: d.getMonth() + 1, anio: d.getFullYear() });
   }
-  const mes = parseInt(window._bonosMes ?? meses[0].mes);
-  const anio = parseInt(window._bonosAnio ?? meses[0].anio);
+  // Si ya pasó el día 20, el período activo es el del mes siguiente
+  const defaultIdx = ahora.getDate() > 20 ? 0 : 1;
+  const mes = parseInt(window._bonosMes ?? meses[defaultIdx].mes);
+  const anio = parseInt(window._bonosAnio ?? meses[defaultIdx].anio);
   const periodo = getPeriodo(mes, anio);
   const pasantes = _db.users().filter(u => u.rol === 'pasante' && isUserActive(u));
 
