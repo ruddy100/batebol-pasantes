@@ -1397,7 +1397,8 @@ const SEED_USERS = [
 function fmtISOOffset(dias) {
   const d = new Date();
   d.setDate(d.getDate() + dias);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear(), m = d.getMonth()+1, day = d.getDate();
+  return `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 }
 
 /* ============================================================
@@ -1985,7 +1986,10 @@ async function initApp() {
 /* ============================================================
    ASISTENCIA -- Lógica
    ============================================================ */
-function fechaHoyISO() { return new Date().toISOString().slice(0, 10); }
+function fechaHoyISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtTime(iso) { if (!iso) return '--'; const d = new Date(iso); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
 function fmtDate(iso) {
@@ -2179,7 +2183,7 @@ function checkVigencias() {
       const yaNotif = db_notif.all().some(n =>
         n.userId === p.id &&
         n.icono === 'fa-calendar-exclamation' &&
-        n.creadoEn.slice(0,10) === fechaHoyISO()
+        n.creadoEn && n.creadoEn.slice(0,10) === fechaHoyISO()
       );
       if (!yaNotif) {
         // Solo notificar al pasante (no a encargados ni gestores)
@@ -2925,7 +2929,7 @@ function renderPasanteHome(user) {
   // Métricas del mes
   const att = _db.attendance().filter(a => a.userId === user.id);
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
   const attMes = att.filter(a => a.fecha >= inicioMes);
   const puntuales = contarEstados(attMes).puntuales;
   const tardanzas = contarEstados(attMes).tardanzas;
@@ -3491,7 +3495,7 @@ function renderEncargadoHome(user) {
   const acts = _db.activities().filter(a => ids.includes(a.userId));
   const hoy = fechaHoyISO();
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
   const attMes = att.filter(a => a.fecha >= inicioMes);
   const puntuales = contarEstados(attMes).puntuales;
   const tardanzas = contarEstados(attMes).tardanzas;
@@ -3629,7 +3633,7 @@ function renderTeam(user) {
   const acts = _db.activities();
   const hoy = fechaHoyISO();
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
   const areas = [...new Set(_db.users().filter(u => u.rol === 'pasante').map(p => p.area))];
 
   return `
@@ -4105,7 +4109,7 @@ function renderGestorHome(user) {
   const acts = _db.activities();
   const hoy = fechaHoyISO();
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
   const pasantesActivos = pasantes.filter(p => isUserActive(p));
   const idsPasantes = new Set(pasantesActivos.map(p => p.id));
   const attMes = att.filter(a => idsPasantes.has(a.userId) && a.fecha >= inicioMes);
@@ -4246,7 +4250,7 @@ function renderAnalytics(user) {
   const acts = _db.activities();
   const areas = [...new Set(pasantes.map(p => p.area))];
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
 
   // Métricas por área
   const areaStats = areas.map(area => {
@@ -5399,7 +5403,7 @@ function showPasanteDetail(userId) {
   const att = _db.attendance().filter(a => a.userId === userId).sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, 10);
   const acts = _db.activities().filter(a => a.userId === userId).sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, 5);
   const ahora = new Date();
-  const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+  const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
   const attMes = _db.attendance().filter(a => a.userId === userId && a.fecha >= inicioMes);
   const punt = attMes.length > 0 ? Math.round(contarEstados(attMes).puntuales / attMes.length * 100) : 0;
 
@@ -7462,7 +7466,7 @@ function initCharts() {
     const pasantes = _db.users().filter(u => u.rol === 'pasante' && u.area === user.area);
     const ids = pasantes.map(p => p.id);
     const ahora = new Date();
-    const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+    const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
     const att = _db.attendance().filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
     const puntuales = contarEstados(att).puntuales;
     const tardanzas = att.filter(a => a.estado === 'tardanza').length;
@@ -7541,7 +7545,7 @@ function initCharts() {
     const pasantes = _db.users().filter(u => u.rol === 'pasante');
     const areas = [...new Set(pasantes.map(p => p.area))];
     const ahora = new Date();
-    const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+    const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
     const data = areas.map(area => {
       const ids = pasantes.filter(p => p.area === area).map(p => p.id);
       const att = _db.attendance().filter(a => ids.includes(a.userId) && a.fecha >= inicioMes);
@@ -7573,7 +7577,7 @@ function initCharts() {
   if (elAE) {
     destroyChart('chartAnalyticsEstado');
     const ahora = new Date();
-    const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().slice(0, 10);
+    const inicioMes = `${ahora.getFullYear()}-${pad(ahora.getMonth() + 1)}-01`;
     const att = _db.attendance().filter(a => a.fecha >= inicioMes);
     const puntuales = contarEstados(att).puntuales;
     const tardanzas = att.filter(a => a.estado === 'tardanza').length;
