@@ -5661,25 +5661,42 @@ async function submitInforme(userId, mes, anio, reflexion) {
 }
 
 async function aprobarInforme(infId, comentario) {
-  // Recargar informes frescos para asegurar que el informe existe en caché
   cacheClear('inf');
   await db.informes();
   const arr = _db.informes();
   const inf = arr.find(i => i.id === infId);
   if (!inf) { toast('No se encontró el informe. Recarga la página e intenta de nuevo.', 'error'); return; }
-  const updInf = { ...inf, estado: 'aprobado', aprobadoEn: new Date().toISOString(), aprobadoPor: getCurrentUser()?.nombre || 'Encargado', comentarioEncargado: comentario || '' };
-  await db.saveInformeRow(updInf);
-  await db.informes();
+
+  // Guardar directamente con upsert por user_id+mes+anio (no depende del id temporal)
+  try {
+    await db.saveInformeRow({
+      userId: inf.userId, mes: inf.mes, anio: inf.anio,
+      estado: 'aprobado',
+      reflexion: inf.reflexion || '',
+      enviadoEn: inf.enviadoEn || new Date().toISOString(),
+      aprobadoEn: new Date().toISOString(),
+      aprobadoPor: getCurrentUser()?.nombre || 'Encargado',
+      comentarioEncargado: comentario || '',
+      firma: inf.firma || simpleHash(`${inf.userId}-${inf.mes}-${inf.anio}`),
+    });
+    cacheClear('inf');
+    await db.informes();
+  } catch(err) {
+    toast('Error al aprobar: ' + (err.message || 'intenta de nuevo'), 'error');
+    return;
+  }
+
   toast('Informe aprobado correctamente', 'success');
 
   const periodo = `${MESES_NOMBRE[inf.mes]} ${inf.anio}`;
+  const aprobadoPorNombre = getCurrentUser()?.nombre || 'Encargado';
   pushNotif(inf.userId, {
     tipo: 'success',
     icono: 'fa-circle-check',
     titulo: `¡Informe de ${periodo} aprobado!`,
     desc: comentario
-      ? `Tu encargado aprob_ el informe. Comentario: "${comentario}"`
-      : `Tu encargado ${inf.aprobadoPor} aprob_ tu informe. Ya es elegible para el bono.`,
+      ? `Tu encargado aprobó el informe. Comentario: "${comentario}"`
+      : `Tu encargado ${aprobadoPorNombre} aprobó tu informe. Ya es elegible para el bono.`,
     accion: { tab: 'reports' },
   });
   // Notificar a gestores
@@ -5698,9 +5715,25 @@ async function rechazarInforme(infId, comentario) {
   const arr = _db.informes();
   const inf = arr.find(i => i.id === infId);
   if (!inf) { toast('No se encontró el informe. Recarga la página e intenta de nuevo.', 'error'); return; }
-  const updInf2 = { ...inf, estado: 'rechazado', comentarioEncargado: comentario || '', aprobadoEn: null };
-  await db.saveInformeRow(updInf2);
-  await db.informes();
+
+  try {
+    await db.saveInformeRow({
+      userId: inf.userId, mes: inf.mes, anio: inf.anio,
+      estado: 'rechazado',
+      reflexion: inf.reflexion || '',
+      enviadoEn: inf.enviadoEn || null,
+      aprobadoEn: null,
+      aprobadoPor: null,
+      comentarioEncargado: comentario || '',
+      firma: inf.firma || simpleHash(`${inf.userId}-${inf.mes}-${inf.anio}`),
+    });
+    cacheClear('inf');
+    await db.informes();
+  } catch(err) {
+    toast('Error al devolver: ' + (err.message || 'intenta de nuevo'), 'error');
+    return;
+  }
+
   toast('Informe devuelto al pasante', 'warning');
 
   const periodo = `${MESES_NOMBRE[inf.mes]} ${inf.anio}`;
@@ -6487,10 +6520,10 @@ function openRevisionModal(infId) {
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
       ${inf.estado !== 'aprobado' ? `
-        <button class="btn btn-danger" onclick="rechazarInforme('${infId}',document.getElementById('revComentario').value); closeModal(); renderApp();">
+        <button class="btn btn-danger" onclick="const c=document.getElementById('revComentario').value; rechazarInforme('${infId}',c).then(()=>{closeModal();renderApp();}).catch(e=>toast(e.message,'error'));">
           <i class="fas fa-rotate-left"></i> Devolver
         </button>
-        <button class="btn btn-success" onclick="aprobarInforme('${infId}',document.getElementById('revComentario').value); closeModal(); renderApp();">
+        <button class="btn btn-success" onclick="const c=document.getElementById('revComentario').value; aprobarInforme('${infId}',c).then(()=>{closeModal();renderApp();}).catch(e=>toast(e.message,'error'));">
           <i class="fas fa-check"></i> Aprobar
         </button>` : `<button class="btn btn-secondary" onclick="rechazarInforme('${infId}','').then(()=>{closeModal();renderApp();}).catch(e=>toast(e.message,'error'));">Revertir aprobación</button>`}
     </div>
